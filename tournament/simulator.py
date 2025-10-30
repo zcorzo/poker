@@ -79,7 +79,7 @@ class TournamentSimulator:
                     genome_idx=genome_idx,
                     highlight=True
                 )
-                self.genome_bankroll.setdefault(g.uid, 0.0)
+                # Do not reset genome_bankroll here; it persists across tournaments
                 players.append(pl)
                 self.players_by_id[pid] = pl
 
@@ -102,7 +102,7 @@ class TournamentSimulator:
                     genome_idx=genome_idx,
                     highlight=False
                 )
-                self.genome_bankroll.setdefault(g.uid, 0.0)
+                # Do not reset genome_bankroll here; it persists across tournaments
                 players.append(pl)
                 self.players_by_id[pid] = pl
 
@@ -286,7 +286,6 @@ class TournamentSimulator:
 
     def run_single_tournament(self, progress_base: float, progress_scale: float) -> Dict:
         tables = self.initial_tables()
-        self.emit_tables(tables)
 
         hands_played = 0
         level = 1
@@ -295,13 +294,16 @@ class TournamentSimulator:
         # Track initial player count for progress within this tournament
         initial_players = sum(len(t.players) for t in tables)
 
-        # Economy: deduct buy-in from all entrants' cumulative bankroll
+        # Economy: deduct buy-in from all entrants' cumulative bankroll BEFORE first UI emit to avoid flicker
         buy_in = float(self.cfg.get("buy_in", 0.0))
-        # Collect all entrants genomes from initial tables
         for tbl in tables:
             for pl in tbl.players:
                 genome = self.trainer.population[pl.genome_idx]
-                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) - buy_in
+                current = self.genome_bankroll.get(genome.uid, 0.0)
+                self.genome_bankroll[genome.uid] = current - buy_in
+
+        # Now emit tables with accurate bankrolls
+        self.emit_tables(tables)
 
         # Track elimination order for payouts (players appended as they are eliminated)
         elimination_order: List[Player] = []
