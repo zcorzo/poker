@@ -120,6 +120,9 @@ class App(tk.Tk):
                     if val is not None:
                         self.progress_var.set(val)
                     self.stats_label.config(text=evt.get("text", ""))
+                elif etype == "best_bankroll":
+                    amt = evt.get("amount", 0.0)
+                    self.tournament_view.set_best_bankroll(amt)
                 elif etype == "optimization_finished":
                     converged = evt.get("converged", False)
                     best_ranges = evt.get("best_ranges", None)

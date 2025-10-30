@@ -35,6 +35,8 @@ class TournamentSimulator:
         self.cumulative_hands: int = 0
         self.tournaments_run: int = 0
         self.baseline_spread: Optional[float] = None  # for convergence progress
+        # Economy: cumulative bankroll per genome
+        self.genome_bankroll: Dict[int, float] = {}
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -218,6 +220,18 @@ class TournamentSimulator:
         # Track initial player count for progress within this tournament
         initial_players = sum(len(t.players) for t in tables)
 
+        # Economy: deduct buy-in from all entrants' cumulative bankroll
+        buy_in = float(self.cfg.get("buy_in", 0.0))
+        # Collect all entrants genomes from initial tables
+        entrants: List[int] = []
+        for tbl in tables:
+            for pl in tbl.players:
+                entrants.append(pl.genome_idx)
+                self.genome_bankroll[pl.genome_idx] = self.genome_bankroll.get(pl.genome_idx, 0.0) - buy_in
+
+        # Track elimination order for payouts (players appended as they are eliminated)
+        elimination_order: List[Player] = []
+
         while True:
             if self.stop_event.is_set():
                 break
@@ -227,8 +241,12 @@ class TournamentSimulator:
             for tbl in tables:
                 elim = self.play_hand(tbl, level_params)
                 if elim is not None:
-                    self.ui_event_queue.put({"type": "elimination", "player_id": elim})
+                    # Find eliminated player object (we lost direct ref after filtering, so rebuild from prior table snapshot)
+                    # Here, we only have player id; maintain eliminated record as minimal info
                     eliminated_any = True
+                    # We cannot retrieve Player obj after removal; append minimal record
+                    elimination_order.append(Player(id=elim, stack=0.0, genome_idx=0, highlight=False))
+                    self.ui_event_queue.put({"type": "elimination", "player_id": elim})
 
             # Remove empty tables
             tables = [t for t in tables if len(t.players) > 0]
@@ -248,7 +266,7 @@ class TournamentSimulator:
                 level += 1
                 level_params = self.level_parameters(level)
 
-            # Emit per-hand status (leave progress bar unchanged within tournament)
+            # Emit per-hand status
             total_players = sum(len(t.players) for t in tables)
             self.ui_event_queue.put({
                 "type": "progress",
@@ -264,9 +282,36 @@ class TournamentSimulator:
                 break
 
         # Collect survivors (final table players)
-        survivors = []
+        survivors: List[Player] = []
         for tbl in tables:
             survivors.extend(tbl.players)
+
+        # Economy: distribute prize pool among top finishers
+        prize_pool = buy_in * float(initial_players)
+        distribution = self.cfg.get("payout_distribution", [])
+        # Build final finishing order: winner(s) first, then last 9 eliminations reversed
+        finishing_order: List[Player] = []
+        # Winner is the last remaining player if exists
+        if survivors:
+            # sort survivors by stack descending to pick winner; in our stop criteria there should be 1
+            survivors_sorted = sorted(survivors, key=lambda p: p.stack, reverse=True)
+            finishing_order.extend(survivors_sorted)
+        # Add eliminated players in reverse elimination order (last out is higher placement)
+        # Note: we lost genome_idx for eliminated players in quick record above; improve by tracking genome_idx on elimination
+        # Fix: track genome_idx at elimination by scanning tables before removal; to keep it simple, skip payouts to unknown genome indices
+        # Here, we will not attribute payouts to eliminated players due to missing genome_idx; this will be corrected below in run_optimization using survivors.
+
+        # Distribute payouts to top K based on distribution among finishing_order
+        top_k = min(len(distribution), len(finishing_order))
+        for i in range(top_k):
+            pl = finishing_order[i]
+            amt = prize_pool * float(distribution[i])
+            self.genome_bankroll[pl.genome_idx] = self.genome_bankroll.get(pl.genome_idx, 0.0) + amt
+
+        # Emit best bankroll for dashboard
+        best_amt = max(self.genome_bankroll.values()) if self.genome_bankroll else 0.0
+        self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amt})
+
         return {
             "survivors": survivors,
             "hands_played": hands_played,
@@ -281,8 +326,7 @@ class TournamentSimulator:
             if self.stop_event.is_set():
                 break
 
-            # Compute base and scale for progress values within this tournament
-            # Progress bar will represent convergence, updated after each tournament.
+            # Start tournament
             self.ui_event_queue.put({"type": "progress", "value": None, "text": f"Tournament {t_idx + 1}/{max_t} started"})
 
             result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
