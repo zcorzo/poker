@@ -104,14 +104,9 @@ class TournamentView(ttk.Frame):
         style.configure("NoPad.TLabelframe", padding=0)
         style.configure("NoPad.TLabelframe.Label", padding=0)
 
-        # Use grid to anchor everything to the top
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=0)
-        self.grid_rowconfigure(1, weight=0)
-
-        # Controls
+        # Controls (use pack consistently to avoid geometry manager conflicts)
         ctrl = ttk.Frame(self, style="NoPad.TFrame")
-        ctrl.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        ctrl.pack(side=tk.TOP, fill=tk.X, padx=0, pady=0)
         # Left controls
         left_ctrl = ttk.Frame(ctrl, style="NoPad.TFrame")
         left_ctrl.pack(side=tk.LEFT, padx=0, pady=0)
@@ -132,13 +127,9 @@ class TournamentView(ttk.Frame):
         self.payout_tree.column("payout", width=120, anchor="e")
         self.payout_tree.pack(side=tk.TOP, anchor="e")
 
-    def clear_payouts(self):
-        for i in self.payout_tree.get_children():
-            self.payout_tree.delete(i)
-
-        # Tables container anchored at top
+        # Tables container anchored at top (pack with no expand to prevent jumping)
         self.canvas = ttk.Frame(self, style="NoPad.TFrame")
-        self.canvas.grid(row=1, column=0, sticky="nw", padx=0, pady=0)
+        self.canvas.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, padx=0, pady=0)
 
     def build_tables(self, num_tables, players_per_table):
         # Ensure canvas exists (guard against early calls before __init__ completed)
