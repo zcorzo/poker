@@ -42,10 +42,12 @@ class TournamentSimulator:
         # Live payout locking when field reaches top-10
         self.top10_lock_active: bool = False
         self.locked_payouts: List[Dict] = []  # list of {"player_id":..., "uid":..., "payout":...}
+        # Persistent player numbering: genome UID -> stable player_id, and global counter
+        self.persistent_ids: Dict[str, int] = {}
+        self.next_player_id: int = 1
 
     def initial_tables(self) -> List[Table]:
         tables = []
-        pid = 1
         num_tables = int(self.cfg["num_tables"])
         seats_per_table = int(self.cfg["players_per_table"])
         pop = self.trainer.population
@@ -63,6 +65,12 @@ class TournamentSimulator:
             if highlighted_genomes:
                 g = highlighted_genomes.pop(0)
                 genome_idx = pop.index(g)
+                # Assign persistent player id
+                pid = self.persistent_ids.get(g.uid)
+                if pid is None:
+                    pid = self.next_player_id
+                    self.persistent_ids[g.uid] = pid
+                    self.next_player_id += 1
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
@@ -72,7 +80,6 @@ class TournamentSimulator:
                 self.genome_bankroll.setdefault(g.uid, 0.0)
                 players.append(pl)
                 self.players_by_id[pid] = pl
-                pid += 1
 
             # Fill remaining seats from others
             while len(players) < seats_per_table:
@@ -81,6 +88,12 @@ class TournamentSimulator:
                     other_genomes = pop[:]  # fallback to entire population
                 g = other_genomes.pop(0)
                 genome_idx = pop.index(g)
+                # Assign persistent player id
+                pid = self.persistent_ids.get(g.uid)
+                if pid is None:
+                    pid = self.next_player_id
+                    self.persistent_ids[g.uid] = pid
+                    self.next_player_id += 1
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
@@ -90,23 +103,26 @@ class TournamentSimulator:
                 self.genome_bankroll.setdefault(g.uid, 0.0)
                 players.append(pl)
                 self.players_by_id[pid] = pl
-                pid += 1
 
             tables.append(Table(id=t + 1, players=players))
 
         return tables
 
     def emit_tables(self, tables: List[Table]):
-        # Include cumulative bankroll in UI
+        # Include cumulative bankroll in UI and emit best bankroll among current survivors
         table_view = []
+        current_bankrolls = []
         for tbl in tables:
             row = []
             for p in tbl.players:
-                # Genome uid for this player based on current population order position
                 genome = self.trainer.population[p.genome_idx]
-                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": self.genome_bankroll.get(genome.uid, 0.0)})
+                b = self.genome_bankroll.get(genome.uid, 0.0)
+                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": b})
+                current_bankrolls.append(b)
             table_view.append(row)
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
+        if current_bankrolls:
+            self.ui_event_queue.put({"type": "best_bankroll", "amount": max(current_bankrolls)})
 
     def level_parameters(self, level: int) -> Dict:
         sb = self.cfg["small_blind"] * (self.cfg["blind_increase_multiplier"] ** max(0, level - 1))
