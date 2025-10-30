@@ -111,12 +111,25 @@ class TournamentView(ttk.Frame):
         # Controls
         ctrl = ttk.Frame(self, style="NoPad.TFrame")
         ctrl.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
-        ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2, pady=0)
-        ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2, pady=0)
+        # Left controls
+        left_ctrl = ttk.Frame(ctrl, style="NoPad.TFrame")
+        left_ctrl.pack(side=tk.LEFT, padx=0, pady=0)
+        ttk.Button(left_ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2, pady=0)
+        ttk.Button(left_ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2, pady=0)
 
-        # Best bankroll label
+        # Right info: best bankroll and payout projections
+        right_info = ttk.Frame(ctrl, style="NoPad.TFrame")
+        right_info.pack(side=tk.RIGHT, padx=6, pady=0)
         self.best_bankroll_var = tk.StringVar(value="Best bankroll: $0")
-        ttk.Label(ctrl, textvariable=self.best_bankroll_var).pack(side=tk.RIGHT, padx=6)
+        ttk.Label(right_info, textvariable=self.best_bankroll_var).pack(side=tk.TOP, anchor="e")
+
+        # Live payout projections
+        self.payout_tree = ttk.Treeview(right_info, columns=("player", "payout"), show="headings", height=6)
+        self.payout_tree.heading("player", text="Player")
+        self.payout_tree.heading("payout", text="Projected Payout")
+        self.payout_tree.column("player", width=80, anchor="e")
+        self.payout_tree.column("payout", width=120, anchor="e")
+        self.payout_tree.pack(side=tk.TOP, anchor="e")
 
         # Tables container anchored at top
         self.canvas = ttk.Frame(self, style="NoPad.TFrame")
@@ -182,6 +195,14 @@ class TournamentView(ttk.Frame):
 
     def set_best_bankroll(self, amount: float):
         self.best_bankroll_var.set(f"Best bankroll: ${int(amount)}")
+
+    def update_payouts(self, projections):
+        # projections: list of {"player_id":..., "payout":...}
+        # refresh treeview
+        for i in self.payout_tree.get_children():
+            self.payout_tree.delete(i)
+        for item in projections:
+            self.payout_tree.insert("", "end", values=(item["player_id"], f"${int(item['payout'])}"))
 
     def eliminate_player(self, player_id):
         lbl = self.player_labels.get(player_id)

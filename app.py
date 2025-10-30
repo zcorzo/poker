@@ -120,6 +120,9 @@ class App(tk.Tk):
                     if val is not None:
                         self.progress_var.set(val)
                     self.stats_label.config(text=evt.get("text", ""))
+                elif etype == "payout_projection":
+                    # {"type":"payout_projection","projections":[{"player_id":..,"payout":..}, ...]}
+                    self.tournament_view.update_payouts(evt.get("projections", []))
                 elif etype == "best_bankroll":
                     amt = evt.get("amount", 0.0)
                     self.tournament_view.set_best_bankroll(amt)

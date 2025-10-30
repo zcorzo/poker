@@ -106,8 +106,10 @@ class EvolutionTrainer:
         best = self.history[-1]["elite"][0]
         return best.to_dict()
 
-    def step(self) -> Dict:
-        # Rank current population
+    def rank_population(self) -> Dict:
+        """
+        Rank current population without evolving it. Records fitness spread and elites to history.
+        """
         fitness = self.estimate_fitness(self.population)
         ranked = sorted(zip(self.population, fitness), key=lambda x: x[1], reverse=True)
         elite_genomes = [g for g, f in ranked[:max(1, int(self.elite_fraction * len(ranked)))]]
@@ -118,6 +120,4 @@ class EvolutionTrainer:
             "best_fitness": max(fitness) if fitness else 0.0,
         }
         self.history.append(info)
-        # Evolve
-        self.evolve(elite_genomes)
         return info

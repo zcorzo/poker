@@ -308,13 +308,28 @@ class TournamentSimulator:
                 level += 1
                 level_params = self.level_parameters(level)
 
-            # Emit per-hand status
-            total_players = sum(len(t.players) for t in tables)
-            self.ui_event_queue.put({
-                "type": "progress",
-                "value": None,
-                "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
-            })
+            # Emit per-hand status (leave progress bar unchanged within tournament)
+        total_players = sum(len(t.players) for t in tables)
+        self.ui_event_queue.put({
+            "type": "progress",
+            "value": None,
+            "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
+        })
+
+        # Emit projected payouts live (based on current stacks)
+        prize_pool = buy_in * float(initial_players)
+        distribution = self.cfg.get("payout_distribution", [])
+        # Build current leaderboard by stack
+        current_players = []
+        for tbl in tables:
+            for pl in tbl.players:
+                current_players.append(pl)
+        current_players.sort(key=lambda p: p.stack, reverse=True)
+        projections = []
+        for i in range(min(len(distribution), len(current_players))):
+            amt = prize_pool * float(distribution[i])
+            projections.append({"player_id": current_players[i].id, "payout": amt})
+        self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
 
             # Sleep to simulate pace
             time.sleep(max(0.0, float(self.cfg["hand_speed_sec"])))
@@ -379,12 +394,12 @@ class TournamentSimulator:
             top_survivors = survivors_sorted[:10]
             self.highlight_genome_idxs = {self.trainer.population[p.genome_idx].uid for p in top_survivors}
 
-            # Advance evolution
-            info = self.trainer.step()
+            # Rank current population without evolving to compute convergence
+            info = self.trainer.rank_population()
             # Initialize baseline spread if not set
             if self.baseline_spread is None:
                 self.baseline_spread = info["fitness_spread"]
-            # Replace top survivors by elite
+            # Replace population using survivors to ensure they advance
             survivor_genomes = [self.trainer.population[p.genome_idx] for p in top_survivors]
             self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"])
 
