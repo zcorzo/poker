@@ -150,26 +150,74 @@ class TournamentView(ttk.Frame):
 class ResultsView(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
-        self.text = tk.Text(self, wrap=tk.NONE, height=30)
-        self.text.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        self.container = ttk.Frame(self)
+        self.container.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
 
     def display_ranges(self, ranges):
-        # ranges: dict with keys: preflop, postflop; each contains position-based matrices
-        self.text.delete("1.0", tk.END)
-        self.text.insert(tk.END, "Optimized Betting Ranges\n\n")
+        # Clear previous content
+        for child in self.container.winfo_children():
+            child.destroy()
 
-        def fmt_matrix(name, mat):
-            s = f"{name}:\n"
-            for row in mat:
-                s += " ".join(f"{v:0.2f}" for v in row) + "\n"
-            s += "\n"
-            return s
+        ttk.Label(self.container, text="Optimized Betting Ranges", font=("TkDefaultFont", 12, "bold")).pack(anchor="w", pady=(2, 6))
+
+        # Color mapping thresholds
+        def action_color(v: float) -> str:
+            if v is None:
+                return "#808080"
+            if v < 0.33:
+                return "#808080"  # fold
+            elif v < 0.66:
+                return "#f0ad4e"  # call
+            else:
+                return "#d9534f"  # raise
+
+        ranks = "23456789TJQKA"
+
+        def combo_label(i: int, j: int) -> str:
+            if i == j:
+                return ranks[i] + ranks[j]
+            # upper triangle suited, lower offsuit
+            hi = max(i, j)
+            lo = min(i, j)
+            if i < j:
+                return ranks[hi] + ranks[lo] + "s"
+            else:
+                return ranks[hi] + ranks[lo] + "o"
+
+        def render_matrix(parent, title: str, mat):
+            frame = ttk.LabelFrame(parent, text=title)
+            frame.pack(fill=tk.X, padx=2, pady=4)
+
+            # Grid of colored squares with labels
+            for i in range(len(mat)):
+                for j in range(len(mat[i])):
+                    v = mat[i][j]
+                    color = action_color(v)
+                    lbl = tk.Label(frame, text=combo_label(i, j), bg=color, fg="black", width=4)
+                    lbl.grid(row=i, column=j, padx=1, pady=1, sticky="nsew")
+
+            # Make cells expand uniformly
+            rows = len(mat)
+            cols = len(mat[0]) if mat else 0
+            for i in range(rows):
+                frame.rowconfigure(i, weight=1)
+            for j in range(cols):
+                frame.columnconfigure(j, weight=1)
 
         pre = ranges.get("preflop", {})
         post = ranges.get("postflop", {})
+
         for pos in ["early", "middle", "late"]:
             if pos in pre:
-                self.text.insert(tk.END, fmt_matrix(f"Preflop ({pos})", pre[pos]))
+                render_matrix(self.container, f"Preflop ({pos})", pre[pos])
+
         for pos in ["early", "middle", "late"]:
             if pos in post:
-                self.text.insert(tk.END, fmt_matrix(f"Postflop ({pos})", post[pos]))
+                render_matrix(self.container, f"Postflop ({pos})", post[pos])
+
+        # Legend
+        legend = ttk.Frame(self.container)
+        legend.pack(fill=tk.X, pady=(6, 2))
+        tk.Label(legend, text="Fold", bg="#808080", width=6).pack(side=tk.LEFT, padx=2)
+        tk.Label(legend, text="Call", bg="#f0ad4e", width=6).pack(side=tk.LEFT, padx=2)
+        tk.Label(legend, text="Raise", bg="#d9534f", width=6).pack(side=tk.LEFT, padx=2)
