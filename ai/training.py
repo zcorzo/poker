@@ -32,12 +32,15 @@ class SimpleRangeNet(nn.Module):
 
 
 class EvolutionTrainer:
-    def __init__(self, population_size: int = 100, elite_fraction: float = 0.1, seed: Optional[int] = None):
+    def __init__(self, population_size: int = 100, elite_fraction: float = 0.2, seed: Optional[int] = None):
         self.rng = random.Random(seed)
         self.population_size = population_size
         self.elite_fraction = elite_fraction
         self.population: List[Genome] = [Genome(seed=self.rng.randint(0, 1_000_000)) for _ in range(population_size)]
         self.history: List[Dict] = []
+        # Persistent performance scores keyed by genome UID (exponential moving average)
+        self.fitness_scores: Dict[str, float] = {}
+        self.ema_alpha: float = 0.4  # smoothing for tournament scores
         self.model = SimpleRangeNet() if torch and nn else None
         if torch and nn:
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
@@ -47,6 +50,7 @@ class EvolutionTrainer:
     def reset(self):
         self.population = [Genome(seed=self.rng.randint(0, 1_000_000)) for _ in range(self.population_size)]
         self.history = []
+        self.fitness_scores = {}
 
     def encode_genome(self, g: Genome) -> List[float]:
         # Flatten matrices and scalars to a fixed-length vector, truncated/padded to 100
@@ -65,38 +69,57 @@ class EvolutionTrainer:
         return vec
 
     def estimate_fitness(self, genomes: List[Genome]) -> List[float]:
-        # If torch available, use the network to estimate; otherwise random fitness
-        if self.model:
-            self.model.train()
-            x = torch.tensor([self.encode_genome(g) for g in genomes], dtype=torch.float32)
-            y = self.model(x).squeeze().detach().numpy().tolist()
-            return y
-        else:
-            return [self.rng.random() for _ in genomes]
+        # Prefer tournament-driven scores; fallback to model/random only when no scores exist
+        scores = []
+        for g in genomes:
+            uid = g.uid
+            if uid in self.fitness_scores:
+                scores.append(self.fitness_scores[uid])
+            else:
+                if self.model:
+                    # lightweight forward pass
+                    x = torch.tensor([self.encode_genome(g)], dtype=torch.float32)
+                    y = self.model(x).squeeze().detach().item()
+                    scores.append(float(y))
+                else:
+                    scores.append(self.rng.random())
+        return scores
 
-    def evolve(self, survivors: List[Genome]) -> None:
-        # Combine survivors with new random genomes, mutate and crossover to refill population
+    def apply_tournament_scores(self, uid_to_score: Dict[str, float]) -> None:
+        """
+        Update fitness_scores with tournament performance (e.g., net winnings or placement scores).
+        Uses EMA to accumulate stability across tournaments.
+        """
+        for uid, score in uid_to_score.items():
+            prev = self.fitness_scores.get(uid)
+            if prev is None:
+                self.fitness_scores[uid] = score
+            else:
+                self.fitness_scores[uid] = (1 - self.ema_alpha) * prev + self.ema_alpha * score
+
+    def evolve(self, survivors: List[Genome], mutate_rate: float = 0.05, mutate_scale: float = 0.05) -> None:
+        # Combine survivors with new children to refill population
         elite = survivors[:max(1, int(self.elite_fraction * self.population_size))]
         new_pop = []
-        # Keep elites
+        # Keep elites unchanged
         new_pop.extend(elite)
         # Crossover between elites to create children
         while len(new_pop) < self.population_size:
             a = self.rng.choice(elite)
             b = self.rng.choice(elite)
             child = a.crossover(b)
-            child.mutate(rate=0.1, scale=0.05)
+            child.mutate(rate=mutate_rate, scale=mutate_scale)
             new_pop.append(child)
         self.population = new_pop
 
-    def check_convergence(self, window: int, eps: float) -> bool:
-        # Check average variance of recent elite genomes' parameters as a proxy convergence metric
-        if len(self.history) < window:
+    def check_convergence(self, window: int, eps: float, min_tournaments: int = 10) -> bool:
+        # Require minimum tournaments before checking for convergence
+        if len(self.history) < max(window, min_tournaments):
             return False
         recent = self.history[-window:]
-        # Compute average fitness spread
+        # Compute average fitness spread of elites across recent windows
         spreads = [h["fitness_spread"] for h in recent]
-        avg_spread = sum(spreads) / len(spreads)
+        avg_spread = sum(spreads) / len(spreads) if spreads else 1.0
         return avg_spread < eps
 
     def best_ranges(self) -> Dict:
@@ -113,7 +136,7 @@ class EvolutionTrainer:
         fitness = self.estimate_fitness(self.population)
         ranked = sorted(zip(self.population, fitness), key=lambda x: x[1], reverse=True)
         elite_genomes = [g for g, f in ranked[:max(1, int(self.elite_fraction * len(ranked)))]]
-        fitness_spread = max(fitness) - min(fitness) if fitness else 1.0
+        fitness_spread = (max(fitness) - min(fitness)) if fitness else 1.0
         info = {
             "elite": elite_genomes,
             "fitness_spread": fitness_spread,

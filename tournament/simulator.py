@@ -501,6 +501,33 @@ class TournamentSimulator:
             for uid in top10_uids:
                 self.survivor_counts[uid] = self.survivor_counts.get(uid, 0) + 1
 
+            # Apply tournament-driven scores: net winnings minus buy-ins per genome UID
+            # Use locked payouts and survivors distribution to compute per-UID score
+            uid_scores: Dict[str, float] = {}
+            prize_pool = float(self.cfg.get("buy_in", 0.0)) * float(sum(len(t.players) for t in result.get("final_tables", [])))
+            distribution = self.cfg.get("payout_distribution", [])
+            # Locked payouts
+            for lp in self.locked_payouts:
+                uid_scores[lp["uid"]] = uid_scores.get(lp["uid"], 0.0) + float(lp["payout"])
+            # Survivors payouts (winner-first) if needed
+            final_survivors = result.get("survivors", [])
+            if final_survivors:
+                survivors_sorted = sorted(final_survivors, key=lambda p: p.stack, reverse=True)
+                locked_count = len(self.locked_payouts)
+                for i in range(min(10 - locked_count, len(survivors_sorted))):
+                    pl = survivors_sorted[i]
+                    uid = self.trainer.population[pl.genome_idx].uid
+                    amt = prize_pool * float(distribution[i]) if i < len(distribution) else 0.0
+                    uid_scores[uid] = uid_scores.get(uid, 0.0) + amt
+            # Subtract buy-in for all entrants
+            entrants_uids = [self.trainer.population[p.genome_idx].uid for p in final_survivors] + [lp["uid"] for lp in self.locked_payouts]
+            buy_in = float(self.cfg.get("buy_in", 0.0))
+            for uid in set(entrants_uids):
+                uid_scores[uid] = uid_scores.get(uid, 0.0) - buy_in
+
+            # Update trainer scores
+            self.trainer.apply_tournament_scores(uid_scores)
+
             # Rank current population without evolving to compute convergence
             info = self.trainer.rank_population()
             # Initialize baseline spread if not set
@@ -508,10 +535,10 @@ class TournamentSimulator:
                 self.baseline_spread = info["fitness_spread"]
 
             # Replace population ensuring top-10 advance
-            # Map UIDs to genomes in current population
             uid_to_genome = {g.uid: g for g in self.trainer.population}
             survivor_genomes = [uid_to_genome[uid] for uid in top10_uids if uid in uid_to_genome]
-            self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"])
+            # Mild mutation to retain winners' traits
+            self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"], mutate_rate=0.03, mutate_scale=0.03)
 
             # Convergence progress: based on fitness spread reduction
             current_spread = info["fitness_spread"]
@@ -522,8 +549,9 @@ class TournamentSimulator:
             # Update progress at end of tournament
             self.ui_event_queue.put({"type": "progress", "value": conv_progress, "text": f"Completed {t_idx + 1}/{max_t} | Convergence {conv_progress:0.1f}%"})
 
-            # Convergence check
-            if self.trainer.check_convergence(window=window, eps=eps):
+            # Convergence check with minimum tournaments threshold
+            min_t = int(self.cfg.get("optimization_min_tournaments_for_convergence", 10))
+            if self.trainer.check_convergence(window=window, eps=eps, min_tournaments=min_t):
                 best = self.trainer.best_ranges()
                 self.ui_event_queue.put({"type": "progress", "value": 100.0, "text": "Converged"})
                 return True, best
