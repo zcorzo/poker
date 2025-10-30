@@ -152,13 +152,16 @@ class TournamentSimulator:
             ti += 1
         return new_tables
 
-    def run_single_tournament(self) -> Dict:
+    def run_single_tournament(self, progress_base: float, progress_scale: float) -> Dict:
         tables = self.initial_tables()
         self.emit_tables(tables)
 
         hands_played = 0
         level = 1
         level_params = self.level_parameters(level)
+
+        # Track initial player count for progress within this tournament
+        initial_players = sum(len(t.players) for t in tables)
 
         while True:
             if self.stop_event.is_set():
@@ -186,11 +189,23 @@ class TournamentSimulator:
                 level += 1
                 level_params = self.level_parameters(level)
 
+            # Emit per-hand status to show activity, with numeric progress value
+            total_players = sum(len(t.players) for t in tables)
+            # Tournament progress: fraction of players eliminated
+            elim_frac = 0.0
+            if initial_players > 1:
+                elim_frac = (initial_players - total_players) / (initial_players - 1)
+            overall_pct = progress_base + progress_scale * (elim_frac * 100.0)
+            self.ui_event_queue.put({
+                "type": "progress",
+                "value": overall_pct,
+                "text": f"Hands: {hands_played} | Level: {level} | Players remaining: {total_players}"
+            })
+
             # Sleep to simulate pace
             time.sleep(max(0.0, float(self.cfg["hand_speed_sec"])))
 
             # Check end of tournament
-            total_players = sum(len(t.players) for t in tables)
             if total_players <= 1:
                 break
 
@@ -212,17 +227,24 @@ class TournamentSimulator:
             if self.stop_event.is_set():
                 break
 
-            # Emit progress
-            pct = (t_idx / max_t) * 100.0
-            self.ui_event_queue.put({"type": "progress", "value": pct, "text": f"Tournament {t_idx + 1}/{max_t}"})
+            # Compute base and scale for progress values within this tournament
+            base_pct = (t_idx / max_t) * 100.0
+            scale_pct = (1.0 / max_t) * 100.0
 
-            result = self.run_single_tournament()
+            # Emit tournament start progress
+            self.ui_event_queue.put({"type": "progress", "value": base_pct, "text": f"Tournament {t_idx + 1}/{max_t} started"})
+
+            result = self.run_single_tournament(progress_base=base_pct, progress_scale=scale_pct)
             # Map survivors to genomes
             survivor_genomes = [self.trainer.population[p.genome_idx] for p in result["survivors"]]
             # Advance evolution
             info = self.trainer.step()
             # Replace top survivors by elite
             self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"])
+
+            # Update progress at end of tournament
+            end_pct = ((t_idx + 1) / max_t) * 100.0
+            self.ui_event_queue.put({"type": "progress", "value": end_pct, "text": f"Completed {t_idx + 1}/{max_t}"})
 
             # Convergence check
             if self.trainer.check_convergence(window=window, eps=eps):
