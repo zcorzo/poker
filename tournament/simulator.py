@@ -334,7 +334,8 @@ class TournamentSimulator:
                             amt = prize_pool * float(distribution[payout_idx]) if 0 <= payout_idx < len(distribution) else 0.0
                             genome = self.trainer.population[pl.genome_idx]
                             self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
-                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt})
+                            # Store rank (1..10) for locked payout rows
+                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt, "rank": payout_idx + 1})
                         # Remove from registry
                         self.players_by_id.pop(elim, None)
                     self.ui_event_queue.put({"type": "elimination", "player_id": elim})
@@ -380,25 +381,23 @@ class TournamentSimulator:
                     current_players.append(pl)
             current_players.sort(key=lambda p: p.stack, reverse=True)
 
-            projections = []
-            # First include locked payouts (players already eliminated during top-10 phase)
-            for lp in self.locked_payouts:
-                projections.append({"player_id": lp["player_id"], "payout": lp["payout"]})
-            # Remaining payouts for still-in players: assign highest remaining payouts to current leaders
-            remaining_slots = max(0, 10 - len(projections))
-            remaining_payouts = []
-            if distribution:
-                # Remaining payout indexes from tail backwards based on already locked count
-                for i in range(remaining_slots):
-                    idx = 9 - len(self.locked_payouts) - i
-                    if idx >= 0:
-                        remaining_payouts.append(prize_pool * float(distribution[idx]))
-            for i in range(min(remaining_slots, len(current_players))):
-                projections.append({"player_id": current_players[i].id, "payout": remaining_payouts[i] if i < len(remaining_payouts) else 0.0})
-            # Pad to always show 10 rows
-            while len(projections) < 10:
-                projections.append({"player_id": "-", "payout": 0.0})
+            # Build rank-based projections 1..10 (winner at top)
+            rank_rows = {lp.get("rank", 10 - i): {"player_id": lp["player_id"], "payout": lp["payout"]} for i, lp in enumerate(self.locked_payouts)}
+            leader_idx = 0
+            for rank in range(1, 11):
+                if rank in rank_rows:
+                    continue  # already locked
+                # Assign projected payout for this rank to next leader if available
+                if leader_idx < len(current_players):
+                    pl = current_players[leader_idx]
+                    leader_idx += 1
+                    amt = prize_pool * float(distribution[rank - 1]) if (rank - 1) < len(distribution) else 0.0
+                    rank_rows[rank] = {"player_id": pl.id, "payout": amt}
+                else:
+                    rank_rows[rank] = {"player_id": "-", "payout": 0.0}
 
+            # Emit in rank order (winner at top)
+            projections = [rank_rows[rank] for rank in range(1, 11)]
             self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
 
             # Sleep to simulate pace
