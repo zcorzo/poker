@@ -67,10 +67,11 @@ class TournamentSimulator:
             players = []
             for p in range(self.cfg["players_per_table"]):
                 genome = ordered_genomes[gi]
+                genome_idx = self.trainer.population.index(genome)
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
-                    genome_idx=gi % len(pop),
+                    genome_idx=genome_idx,
                     highlight=(genome.uid in self.highlight_genome_idxs)
                 )
                 # Track bankroll by genome uid
