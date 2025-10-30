@@ -140,8 +140,13 @@ class TournamentView(ttk.Frame):
         self.canvas.grid(row=1, column=0, sticky="nw", padx=0, pady=0)
 
     def build_tables(self, num_tables, players_per_table):
+        # Ensure canvas exists (guard against early calls before __init__ completed)
+        if not hasattr(self, "canvas") or self.canvas is None:
+            self.canvas = ttk.Frame(self, style="NoPad.TFrame")
+            self.canvas.grid(row=1, column=0, sticky="nw", padx=0, pady=0)
+
         # Clear old frames
-        for f in self.table_frames:
+        for f in getattr(self, "table_frames", []):
             f.destroy()
         self.table_frames = []
         self.player_labels = {}
