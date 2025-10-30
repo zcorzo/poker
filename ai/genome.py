@@ -6,8 +6,8 @@ from uuid import uuid4
 class Genome:
     """
     Represents a player's betting ranges and strategy parameters.
-    - Preflop ranges: matrices for early/middle/late positions (13x13 for combos, simplified here to 13x13 values)
-    - Postflop ranges: matrices for early/middle/late positions (e.g., 5x5 buckets representing aggression levels)
+    - Preflop ranges: matrices for early/middle/late positions (13x13 for combos)
+    - Postflop ranges: matrices for early/middle/late positions (now 13x13 to match preflop)
     """
 
     def __init__(self, seed=None):
@@ -19,9 +19,9 @@ class Genome:
             "late": self.random_matrix(13, 13),
         }
         self.postflop = {
-            "early": self.random_matrix(5, 5),
-            "middle": self.random_matrix(5, 5),
-            "late": self.random_matrix(5, 5),
+            "early": self.random_matrix(13, 13),
+            "middle": self.random_matrix(13, 13),
+            "late": self.random_matrix(13, 13),
         }
         # Example scalar parameters
         self.aggression = self.rng.uniform(0.3, 0.7)
