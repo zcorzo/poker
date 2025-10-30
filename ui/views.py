@@ -84,9 +84,9 @@ class TournamentView(ttk.Frame):
         ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2)
         ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2)
 
-        # Canvas for tables
+        # Tables container (no vertical expand to avoid extra top/bottom gray space)
         self.canvas = ttk.Frame(self)
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        self.canvas.pack(fill=tk.X, expand=False, padx=4, pady=2)
 
     def build_tables(self, num_tables, players_per_table):
         # Clear old frames
@@ -102,7 +102,7 @@ class TournamentView(ttk.Frame):
         idx = 0
         for r in range(rows):
             row_frame = ttk.Frame(self.canvas)
-            row_frame.pack(fill=tk.X, expand=False, pady=2)
+            row_frame.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, pady=1)
             for c in range(cols):
                 if idx >= num_tables:
                     break
