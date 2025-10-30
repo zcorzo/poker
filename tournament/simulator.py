@@ -46,44 +46,54 @@ class TournamentSimulator:
     def initial_tables(self) -> List[Table]:
         tables = []
         pid = 1
-        total_seats = self.cfg["num_tables"] * self.cfg["players_per_table"]
-        # Build a seating order that ensures highlighted genomes occupy first seats
+        num_tables = int(self.cfg["num_tables"])
+        seats_per_table = int(self.cfg["players_per_table"])
         pop = self.trainer.population
-        # Map uid to genome
         uid_to_genome = {g.uid: g for g in pop}
-        # Build ordered list of genomes starting with highlighted ones
-        ordered_genomes = []
-        # Add highlighted first (top-10 finishers)
-        for uid in self.highlight_genome_idxs:
-            if uid in uid_to_genome:
-                ordered_genomes.append(uid_to_genome[uid])
-        # Fill remaining seats with rest of population
-        for g in pop:
-            if g not in ordered_genomes:
-                ordered_genomes.append(g)
-        # Limit to total seats
-        ordered_genomes = (ordered_genomes * ((total_seats // len(ordered_genomes)) + 1))[:total_seats]
 
+        # Prepare highlighted genomes (top-10 finishers) and others
+        highlighted_genomes = [uid_to_genome[uid] for uid in self.highlight_genome_idxs if uid in uid_to_genome]
+        other_genomes = [g for g in pop if g.uid not in self.highlight_genome_idxs]
+
+        # Distribute highlighted one per table (round-robin across tables)
         self.players_by_id = {}
-        gi = 0
-        for t in range(self.cfg["num_tables"]):
+        for t in range(num_tables):
             players = []
-            for p in range(self.cfg["players_per_table"]):
-                genome = ordered_genomes[gi]
-                genome_idx = self.trainer.population.index(genome)
+            # Seat one highlighted if available
+            if highlighted_genomes:
+                g = highlighted_genomes.pop(0)
+                genome_idx = pop.index(g)
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
                     genome_idx=genome_idx,
-                    highlight=(genome.uid in self.highlight_genome_idxs)
+                    highlight=True
                 )
-                # Track bankroll by genome uid
-                self.genome_bankroll.setdefault(genome.uid, 0.0)
+                self.genome_bankroll.setdefault(g.uid, 0.0)
                 players.append(pl)
                 self.players_by_id[pid] = pl
                 pid += 1
-                gi += 1
+
+            # Fill remaining seats from others
+            while len(players) < seats_per_table:
+                # Cycle through others; if exhausted, restart from beginning
+                if not other_genomes:
+                    other_genomes = pop[:]  # fallback to entire population
+                g = other_genomes.pop(0)
+                genome_idx = pop.index(g)
+                pl = Player(
+                    id=pid,
+                    stack=self.cfg["initial_bank"],
+                    genome_idx=genome_idx,
+                    highlight=False
+                )
+                self.genome_bankroll.setdefault(g.uid, 0.0)
+                players.append(pl)
+                self.players_by_id[pid] = pl
+                pid += 1
+
             tables.append(Table(id=t + 1, players=players))
+
         return tables
 
     def emit_tables(self, tables: List[Table]):
@@ -438,6 +448,11 @@ class TournamentSimulator:
         for t_idx in range(max_t):
             if self.stop_event.is_set():
                 break
+
+            # Reset payout lock and clear projection window for new tournament
+            self.top10_lock_active = False
+            self.locked_payouts = []
+            self.ui_event_queue.put({"type": "payout_projection", "projections": []})
 
             # Start tournament
             self.ui_event_queue.put({"type": "progress", "value": None, "text": f"Tournament {t_idx + 1}/{max_t} started"})

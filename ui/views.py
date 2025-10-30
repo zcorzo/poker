@@ -131,6 +131,10 @@ class TournamentView(ttk.Frame):
         self.payout_tree.column("payout", width=120, anchor="e")
         self.payout_tree.pack(side=tk.TOP, anchor="e")
 
+    def clear_payouts(self):
+        for i in self.payout_tree.get_children():
+            self.payout_tree.delete(i)
+
         # Tables container anchored at top
         self.canvas = ttk.Frame(self, style="NoPad.TFrame")
         self.canvas.grid(row=1, column=0, sticky="nw", padx=0, pady=0)
