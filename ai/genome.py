@@ -1,5 +1,6 @@
 import random
 from typing import Dict, List
+from uuid import uuid4
 
 
 class Genome:
@@ -11,6 +12,7 @@ class Genome:
 
     def __init__(self, seed=None):
         self.rng = random.Random(seed)
+        self.uid = str(uuid4())
         self.preflop = {
             "early": self.random_matrix(13, 13),
             "middle": self.random_matrix(13, 13),
@@ -64,6 +66,7 @@ class Genome:
 
     def to_dict(self) -> Dict:
         return {
+            "uid": self.uid,
             "preflop": self.preflop,
             "postflop": self.postflop,
             "aggression": self.aggression,

@@ -43,25 +43,55 @@ class TournamentSimulator:
     def initial_tables(self) -> List[Table]:
         tables = []
         pid = 1
-        genomes_per_player = min(len(self.trainer.population), self.cfg["num_tables"] * self.cfg["players_per_table"])
+        total_seats = self.cfg["num_tables"] * self.cfg["players_per_table"]
+        # Build a seating order that ensures highlighted genomes occupy first seats
+        pop = self.trainer.population
+        # Map uid to genome
+        uid_to_genome = {g.uid: g for g in pop}
+        # Build ordered list of genomes starting with highlighted ones
+        ordered_genomes = []
+        # Add highlighted first (top-10 finishers)
+        for uid in self.highlight_genome_idxs:
+            if uid in uid_to_genome:
+                ordered_genomes.append(uid_to_genome[uid])
+        # Fill remaining seats with rest of population
+        for g in pop:
+            if g not in ordered_genomes:
+                ordered_genomes.append(g)
+        # Limit to total seats
+        ordered_genomes = (ordered_genomes * ((total_seats // len(ordered_genomes)) + 1))[:total_seats]
+
+        self.players_by_id = {}
+        gi = 0
         for t in range(self.cfg["num_tables"]):
             players = []
             for p in range(self.cfg["players_per_table"]):
-                genome_idx = (pid - 1) % genomes_per_player
+                genome = ordered_genomes[gi]
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
-                    genome_idx=genome_idx,
-                    highlight=(genome_idx in self.highlight_genome_idxs)
+                    genome_idx=gi % len(pop),
+                    highlight=(genome.uid in self.highlight_genome_idxs)
                 )
+                # Track bankroll by genome uid
+                self.genome_bankroll.setdefault(genome.uid, 0.0)
                 players.append(pl)
                 self.players_by_id[pid] = pl
                 pid += 1
+                gi += 1
             tables.append(Table(id=t + 1, players=players))
         return tables
 
     def emit_tables(self, tables: List[Table]):
-        table_view = [[{"id": p.id, "stack": p.stack, "highlight": p.highlight} for p in tbl.players] for tbl in tables]
+        # Include cumulative bankroll in UI
+        table_view = []
+        for tbl in tables:
+            row = []
+            for p in tbl.players:
+                # Genome uid for this player based on current population order position
+                genome = self.trainer.population[p.genome_idx]
+                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": self.genome_bankroll.get(genome.uid, 0.0)})
+            table_view.append(row)
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
 
     def level_parameters(self, level: int) -> Dict:
@@ -233,11 +263,10 @@ class TournamentSimulator:
         # Economy: deduct buy-in from all entrants' cumulative bankroll
         buy_in = float(self.cfg.get("buy_in", 0.0))
         # Collect all entrants genomes from initial tables
-        entrants: List[int] = []
         for tbl in tables:
             for pl in tbl.players:
-                entrants.append(pl.genome_idx)
-                self.genome_bankroll[pl.genome_idx] = self.genome_bankroll.get(pl.genome_idx, 0.0) - buy_in
+                genome = self.trainer.population[pl.genome_idx]
+                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) - buy_in
 
         # Track elimination order for payouts (players appended as they are eliminated)
         elimination_order: List[Player] = []
@@ -316,7 +345,9 @@ class TournamentSimulator:
         for i in range(top_k):
             pl = finishing_order[i]
             amt = prize_pool * float(distribution[i])
-            self.genome_bankroll[pl.genome_idx] = self.genome_bankroll.get(pl.genome_idx, 0.0) + amt
+            # Map to genome uid
+            genome = self.trainer.population[pl.genome_idx]
+            self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
 
         # Emit best bankroll for dashboard
         best_amt = max(self.genome_bankroll.values()) if self.genome_bankroll else 0.0

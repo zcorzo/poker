@@ -128,7 +128,7 @@ class TournamentView(ttk.Frame):
                 idx += 1
 
     def update_tables(self, tables):
-        # tables: list of lists of dicts: {"id":..., "stack":..., "highlight": bool}
+        # tables: list of lists of dicts: {"id":..., "stack":..., "highlight": bool, "bankroll": float}
         # Clear and rebuild labels per table
         for tf in self.table_frames:
             for child in tf.winfo_children():
@@ -142,15 +142,16 @@ class TournamentView(ttk.Frame):
                 if isinstance(pinfo, dict):
                     pid = pinfo.get("id")
                     stack = pinfo.get("stack", 0)
+                    bankroll = pinfo.get("bankroll", 0)
                     highlight = bool(pinfo.get("highlight", False))
-                    text = f"{pid}\n${int(stack)}"
+                    text = f"{pid}\n${int(stack)}\nB:${int(bankroll)}"
                 else:
                     pid = pinfo
                     highlight = False
                     text = str(pid)
                 # Use tk.Label to allow background color change for highlight
                 bg = "#c7f9cc" if highlight else None
-                lbl = tk.Label(tf, text=text, bg=bg, relief=tk.GROOVE, width=8, anchor="center", justify="center")
+                lbl = tk.Label(tf, text=text, bg=bg, relief=tk.GROOVE, width=10, anchor="center", justify="center")
                 lbl.grid(row=(idx // 5), column=idx % 5, padx=2, pady=2)
                 self.player_labels[pid] = lbl
 
@@ -166,15 +167,50 @@ class TournamentView(ttk.Frame):
 class ResultsView(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
-        self.container = ttk.Frame(self)
-        self.container.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        # Save latest ranges for export
+        self._latest_ranges = None
+
+        # Toolbar
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill=tk.X, padx=6, pady=4)
+        save_btn = ttk.Button(toolbar, text="Save Ranges", command=self._save_ranges)
+        save_btn.pack(side=tk.LEFT)
+
+        # Scrollable container
+        self.canvas = tk.Canvas(self, borderwidth=0)
+        self.scroll_y = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scroll_frame = ttk.Frame(self.canvas)
+
+        self.scroll_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scroll_y.set)
+
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6, pady=4)
+        self.scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _save_ranges(self):
+        if not self._latest_ranges:
+            return
+        try:
+            import json
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(title="Save Ranges", defaultextension=".json", filetypes=[("JSON", "*.json")])
+            if path:
+                with open(path, "w") as f:
+                    json.dump(self._latest_ranges, f, indent=2)
+        except Exception:
+            pass
 
     def display_ranges(self, ranges):
+        self._latest_ranges = ranges
         # Clear previous content
-        for child in self.container.winfo_children():
+        for child in self.scroll_frame.winfo_children():
             child.destroy()
 
-        ttk.Label(self.container, text="Optimized Betting Ranges", font=("TkDefaultFont", 12, "bold")).pack(anchor="w", pady=(2, 6))
+        ttk.Label(self.scroll_frame, text="Optimized Betting Ranges", font=("TkDefaultFont", 12, "bold")).pack(anchor="w", pady=(2, 6))
 
         # Color mapping thresholds
         def action_color(v: float) -> str:
@@ -225,14 +261,14 @@ class ResultsView(ttk.Frame):
 
         for pos in ["early", "middle", "late"]:
             if pos in pre:
-                render_matrix(self.container, f"Preflop ({pos})", pre[pos])
+                render_matrix(self.scroll_frame, f"Preflop ({pos})", pre[pos])
 
         for pos in ["early", "middle", "late"]:
             if pos in post:
-                render_matrix(self.container, f"Postflop ({pos})", post[pos])
+                render_matrix(self.scroll_frame, f"Postflop ({pos})", post[pos])
 
         # Legend
-        legend = ttk.Frame(self.container)
+        legend = ttk.Frame(self.scroll_frame)
         legend.pack(fill=tk.X, pady=(6, 2))
         tk.Label(legend, text="Fold", bg="#808080", width=6).pack(side=tk.LEFT, padx=2)
         tk.Label(legend, text="Call", bg="#f0ad4e", width=6).pack(side=tk.LEFT, padx=2)

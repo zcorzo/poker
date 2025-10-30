@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
     "random_seed": 42,
 
     # Economy settings
-    "buy_in": 100,  # cost per tournament per player (deducted from cumulative bankroll)
+    "buy_in": 1000,  # cost per tournament per player (deducted from cumulative bankroll)
     # Default payout distribution for top 10 finishers (should sum to 1.0)
     "payout_distribution": [0.25, 0.18, 0.14, 0.11, 0.09, 0.08, 0.06, 0.04, 0.03, 0.02],
 }
