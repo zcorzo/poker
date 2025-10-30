@@ -212,6 +212,9 @@ class TournamentSimulator:
                 tables = self.reseat(tables)
                 self.emit_tables(tables)
                 self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack} for p in tbl.players] for tbl in tables]})
+            else:
+                # No reseat, still emit updated stacks so UI reflects chip movements
+                self.emit_tables(tables)
 
             hands_played += 1
             # Blind level increase
