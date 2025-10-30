@@ -114,7 +114,8 @@ class TournamentSimulator:
         # Include cumulative bankroll in UI and emit best bankroll among current survivors.
         # Color survivors red if they have advanced in multiple tournaments.
         table_view = []
-        current_bankrolls = []
+        best_amount = None
+        best_player_id = None
         for tbl in tables:
             row = []
             for p in tbl.players:
@@ -123,11 +124,13 @@ class TournamentSimulator:
                 advanced_count = self.survivor_counts.get(genome.uid, 0)
                 # highlight stays for top-10; red flag for multi-tournament survivors
                 row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": b, "multi_survivor": advanced_count > 1})
-                current_bankrolls.append(b)
+                if best_amount is None or b > best_amount:
+                    best_amount = b
+                    best_player_id = p.id
             table_view.append(row)
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
-        if current_bankrolls:
-            self.ui_event_queue.put({"type": "best_bankroll", "amount": max(current_bankrolls)})
+        if best_amount is not None and best_player_id is not None:
+            self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amount, "player_id": best_player_id})
 
     def level_parameters(self, level: int) -> Dict:
         sb = self.cfg["small_blind"] * (self.cfg["blind_increase_multiplier"] ** max(0, level - 1))
@@ -443,9 +446,17 @@ class TournamentSimulator:
                 genome = self.trainer.population[pl.genome_idx]
                 self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
 
-        # Emit best bankroll for dashboard
-        best_amt = max(self.genome_bankroll.values()) if self.genome_bankroll else 0.0
-        self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amt})
+        # Emit best bankroll for dashboard among current survivors
+        best_amt = None
+        best_pid = None
+        for pl in survivors:
+            genome = self.trainer.population[pl.genome_idx]
+            b = self.genome_bankroll.get(genome.uid, 0.0)
+            if best_amt is None or b > best_amt:
+                best_amt = b
+                best_pid = pl.id
+        if best_amt is not None and best_pid is not None:
+            self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amt, "player_id": best_pid})
 
         # Prepare top-10 finisher UIDs for advancement (locked payouts first, then remaining survivors)
         top10_uids: List[str] = [lp["uid"] for lp in self.locked_payouts][:10]

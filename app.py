@@ -129,7 +129,8 @@ class App(tk.Tk):
                         self.tournament_view.update_payouts(projections)
                 elif etype == "best_bankroll":
                     amt = evt.get("amount", 0.0)
-                    self.tournament_view.set_best_bankroll(amt)
+                    pid = evt.get("player_id", None)
+                    self.tournament_view.set_best_bankroll(pid, amt)
                 elif etype == "optimization_finished":
                     converged = evt.get("converged", False)
                     best_ranges = evt.get("best_ranges", None)

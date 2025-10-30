@@ -196,8 +196,11 @@ class TournamentView(ttk.Frame):
                 lbl.grid(row=(idx // 5), column=idx % 5, padx=2, pady=2)
                 self.player_labels[pid] = lbl
 
-    def set_best_bankroll(self, amount: float):
-        self.best_bankroll_var.set(f"Best bankroll: ${int(amount)}")
+    def set_best_bankroll(self, player_id: int, amount: float):
+        if player_id is None:
+            self.best_bankroll_var.set(f"Best bankroll: ${int(amount)}")
+        else:
+            self.best_bankroll_var.set(f"Best bankroll: #{player_id} ${int(amount)}")
 
     def update_payouts(self, projections):
         # projections: list of {"player_id":..., "payout":...}
