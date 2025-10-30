@@ -10,22 +10,22 @@ class ConfigView(ttk.Frame):
         self._build_form(config_state)
 
     def _add_entry(self, row, label, key, value):
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
+        ttk.Label(self, text=label).grid(row=row, column=0, sticky=tk.W, padx=6, pady=2)
         var = tk.StringVar(value=str(value))
         entry = ttk.Entry(self, textvariable=var, width=12)
-        entry.grid(row=row, column=1, sticky=tk.W, padx=8, pady=4)
+        entry.grid(row=row, column=1, sticky=tk.W, padx=6, pady=2)
         self.inputs[key] = var
 
     def _add_check(self, row, label, key, value):
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky=tk.W, padx=8, pady=4)
+        ttk.Label(self, text=label).grid(row=row, column=0, sticky=tk.W, padx=6, pady=2)
         var = tk.BooleanVar(value=bool(value))
         chk = ttk.Checkbutton(self, variable=var)
-        chk.grid(row=row, column=1, sticky=tk.W, padx=8, pady=4)
+        chk.grid(row=row, column=1, sticky=tk.W, padx=6, pady=2)
         self.inputs[key] = var
 
     def _build_form(self, cfg):
         row = 0
-        ttk.Label(self, text="Tournament Configuration", font=("TkDefaultFont", 12, "bold")).grid(row=row, column=0, columnspan=2, pady=(10, 10))
+        ttk.Label(self, text="Tournament Configuration", font=("TkDefaultFont", 12, "bold")).grid(row=row, column=0, columnspan=2, pady=(6, 6))
         row += 1
 
         self._add_entry(row, "Tables", "num_tables", cfg["num_tables"]); row += 1
@@ -46,7 +46,7 @@ class ConfigView(ttk.Frame):
         self._add_entry(row, "Random seed", "random_seed", cfg["random_seed"]); row += 1
 
         btn = ttk.Button(self, text="Apply", command=self._apply_click)
-        btn.grid(row=row, column=0, columnspan=2, pady=(16, 8))
+        btn.grid(row=row, column=0, columnspan=2, pady=(8, 4))
 
         for i in range(2):
             self.columnconfigure(i, weight=1)
@@ -80,13 +80,13 @@ class TournamentView(ttk.Frame):
 
         # Controls
         ctrl = ttk.Frame(self)
-        ctrl.pack(fill=tk.X, padx=8, pady=6)
-        ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=4)
-        ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=4)
+        ctrl.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2)
+        ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2)
 
         # Canvas for tables
         self.canvas = ttk.Frame(self)
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
 
     def build_tables(self, num_tables, players_per_table):
         # Clear old frames
@@ -102,19 +102,19 @@ class TournamentView(ttk.Frame):
         idx = 0
         for r in range(rows):
             row_frame = ttk.Frame(self.canvas)
-            row_frame.pack(fill=tk.X, expand=False)
+            row_frame.pack(fill=tk.X, expand=False, pady=2)
             for c in range(cols):
                 if idx >= num_tables:
                     break
                 tf = ttk.LabelFrame(row_frame, text=f"Table {idx + 1}")
-                tf.pack(side=tk.LEFT, padx=6, pady=6, fill=tk.BOTH, expand=True)
+                tf.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.BOTH, expand=True)
                 self.table_frames.append(tf)
 
                 # placeholders
                 for p in range(players_per_table):
                     player_id = idx * players_per_table + p + 1
                     lbl = ttk.Label(tf, text=str(player_id), relief=tk.GROOVE, width=4)
-                    lbl.grid(row=p // 5, column=p % 5, padx=3, pady=3)
+                    lbl.grid(row=p // 5, column=p % 5, padx=2, pady=2)
                     self.player_labels[player_id] = lbl
                 idx += 1
 
@@ -131,7 +131,7 @@ class TournamentView(ttk.Frame):
             tf.config(text=f"Table {ti + 1} ({len(players)} players)")
             for idx, pid in enumerate(players):
                 lbl = ttk.Label(tf, text=str(pid), relief=tk.GROOVE, width=4)
-                lbl.grid(row=idx // 5, column=idx % 5, padx=3, pady=3)
+                lbl.grid(row=idx // 5, column=idx % 5, padx=2, pady=2)
                 self.player_labels[pid] = lbl
 
     def eliminate_player(self, player_id):
@@ -144,7 +144,7 @@ class ResultsView(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.text = tk.Text(self, wrap=tk.NONE, height=30)
-        self.text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.text.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
 
     def display_ranges(self, ranges):
         # ranges: dict with keys: preflop, postflop; each contains position-based matrices
