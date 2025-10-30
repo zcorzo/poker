@@ -73,6 +73,8 @@ class ConfigView(ttk.Frame):
 class TournamentView(ttk.Frame):
     def __init__(self, parent, start_cb, stop_cb):
         super().__init__(parent)
+        # Remove frame padding to eliminate gray space
+        self.configure(padding=0)
         self.start_cb = start_cb
         self.stop_cb = stop_cb
         self.table_frames = []
@@ -80,13 +82,13 @@ class TournamentView(ttk.Frame):
 
         # Controls
         ctrl = ttk.Frame(self)
-        ctrl.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2)
-        ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2)
+        ctrl.pack(fill=tk.X, padx=0, pady=0)
+        ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2, pady=0)
+        ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2, pady=0)
 
         # Tables container (no vertical expand to avoid extra top/bottom gray space)
         self.canvas = ttk.Frame(self)
-        self.canvas.pack(fill=tk.X, expand=False, padx=4, pady=2)
+        self.canvas.pack(fill=tk.X, expand=False, padx=0, pady=0)
 
     def build_tables(self, num_tables, players_per_table):
         # Clear old frames
@@ -102,19 +104,19 @@ class TournamentView(ttk.Frame):
         idx = 0
         for r in range(rows):
             row_frame = ttk.Frame(self.canvas)
-            row_frame.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, pady=1)
+            row_frame.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, pady=0)
             for c in range(cols):
                 if idx >= num_tables:
                     break
                 tf = ttk.LabelFrame(row_frame, text=f"Table {idx + 1}")
-                tf.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.BOTH, expand=True)
+                tf.pack(side=tk.LEFT, padx=2, pady=0, fill=tk.BOTH, expand=True)
                 self.table_frames.append(tf)
 
                 # placeholders (two-line label: id and stack placeholder)
                 for p in range(players_per_table):
                     player_id = idx * players_per_table + p + 1
                     lbl = ttk.Label(tf, text=f"{player_id}\n$", relief=tk.GROOVE, width=8, anchor="center", justify="center")
-                    lbl.grid(row=(p // 5), column=p % 5, padx=2, pady=2)
+                    lbl.grid(row=(p // 5), column=p % 5, padx=1, pady=1)
                     self.player_labels[player_id] = lbl
                 idx += 1
 
