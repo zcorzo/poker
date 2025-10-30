@@ -39,6 +39,14 @@ class ConfigView(ttk.Frame):
         self._add_entry(row, "Blind increase every N hands", "blind_increase_hands", cfg["blind_increase_hands"]); row += 1
         self._add_entry(row, "Blind increase multiplier", "blind_increase_multiplier", cfg["blind_increase_multiplier"]); row += 1
         self._add_entry(row, "Hand speed (sec/hand)", "hand_speed_sec", cfg["hand_speed_sec"]); row += 1
+
+        # Economy settings
+        self._add_entry(row, "Buy-in ($)", "buy_in", cfg.get("buy_in", 1000)); row += 1
+        # For payout distribution, accept comma-separated percentages/fractions; we store as comma string
+        payout_str = ",".join(str(x) for x in cfg.get("payout_distribution", []))
+        self._add_entry(row, "Payout distribution (comma fractions)", "payout_distribution", payout_str); row += 1
+
+        # Optimization settings
         self._add_entry(row, "Max tournaments", "optimization_max_tournaments", cfg["optimization_max_tournaments"]); row += 1
         self._add_entry(row, "Convergence epsilon", "optimization_convergence_eps", cfg["optimization_convergence_eps"]); row += 1
         self._add_entry(row, "Convergence window", "optimization_window", cfg["optimization_window"]); row += 1
@@ -66,7 +74,16 @@ class ConfigView(ttk.Frame):
             if isinstance(var, tk.BooleanVar):
                 new_cfg[k] = bool(val)
             else:
-                new_cfg[k] = parse(str(val))
+                sval = str(val)
+                if k == "payout_distribution":
+                    try:
+                        # parse comma-separated floats
+                        parts = [p.strip() for p in sval.split(",") if p.strip()]
+                        new_cfg[k] = [float(p) for p in parts]
+                    except Exception:
+                        new_cfg[k] = []
+                else:
+                    new_cfg[k] = parse(sval)
         self.on_apply(new_cfg)
 
 

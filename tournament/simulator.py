@@ -374,10 +374,10 @@ class TournamentSimulator:
             result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
             self.tournaments_run += 1
 
-            # Select top 10 survivors by stack to highlight next tournament
+            # Select top 10 survivors by stack to highlight next tournament (store genome UIDs)
             survivors_sorted = sorted(result["survivors"], key=lambda p: p.stack, reverse=True)
             top_survivors = survivors_sorted[:10]
-            self.highlight_genome_idxs = {p.genome_idx for p in top_survivors}
+            self.highlight_genome_idxs = {self.trainer.population[p.genome_idx].uid for p in top_survivors}
 
             # Advance evolution
             info = self.trainer.step()
