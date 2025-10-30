@@ -14,6 +14,7 @@ class Player:
     id: int
     stack: float
     genome_idx: int  # index into trainer.population
+    highlight: bool = False  # mark survivors carried to next tournament
 
 
 @dataclass
@@ -29,6 +30,11 @@ class TournamentSimulator:
         self.stop_event = stop_event
         self.trainer = trainer
         self.rng = random.Random(config.get("random_seed", None))
+        # State for highlighting and stats
+        self.highlight_genome_idxs: set[int] = set()
+        self.cumulative_hands: int = 0
+        self.tournaments_run: int = 0
+        self.baseline_spread: Optional[float] = None  # for convergence progress
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -38,13 +44,18 @@ class TournamentSimulator:
             players = []
             for p in range(self.cfg["players_per_table"]):
                 genome_idx = (pid - 1) % genomes_per_player
-                players.append(Player(id=pid, stack=self.cfg["initial_bank"], genome_idx=genome_idx))
+                players.append(Player(
+                    id=pid,
+                    stack=self.cfg["initial_bank"],
+                    genome_idx=genome_idx,
+                    highlight=(genome_idx in self.highlight_genome_idxs)
+                ))
                 pid += 1
             tables.append(Table(id=t + 1, players=players))
         return tables
 
     def emit_tables(self, tables: List[Table]):
-        table_view = [[{"id": p.id, "stack": p.stack} for p in tbl.players] for tbl in tables]
+        table_view = [[{"id": p.id, "stack": p.stack, "highlight": p.highlight} for p in tbl.players] for tbl in tables]
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
 
     def level_parameters(self, level: int) -> Dict:
@@ -174,7 +185,6 @@ class TournamentSimulator:
         # Compute target active tables: ceil(players / max_per_table), at least 1
         target_tables = max(1, math.ceil(total_players / max_per_table))
 
-        # If only one table remains necessary, collapse to final table
         new_tables: List[Table] = [Table(id=i + 1, players=[]) for i in range(target_tables)]
 
         # Distribute players round-robin to keep tables as even as possible
@@ -183,7 +193,7 @@ class TournamentSimulator:
             new_tables[ti % target_tables].players.append(pl)
             ti += 1
 
-        # Ensure we don't exceed max_per_table by rebalancing if needed (rare with round-robin)
+        # Ensure we don't exceed max_per_table by rebalancing if needed
         for tbl in new_tables:
             if len(tbl.players) > max_per_table:
                 overflow = tbl.players[max_per_table:]
@@ -226,28 +236,24 @@ class TournamentSimulator:
             if eliminated_any:
                 tables = self.reseat(tables)
                 self.emit_tables(tables)
-                self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack} for p in tbl.players] for tbl in tables]})
+                self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack, "highlight": p.highlight} for p in tbl.players] for tbl in tables]})
             else:
                 # No reseat, still emit updated stacks so UI reflects chip movements
                 self.emit_tables(tables)
 
             hands_played += 1
+            self.cumulative_hands += 1
             # Blind level increase
             if hands_played % int(self.cfg["blind_increase_hands"]) == 0:
                 level += 1
                 level_params = self.level_parameters(level)
 
-            # Emit per-hand status to show activity, with numeric progress value
+            # Emit per-hand status (leave progress bar unchanged within tournament)
             total_players = sum(len(t.players) for t in tables)
-            # Tournament progress: fraction of players eliminated
-            elim_frac = 0.0
-            if initial_players > 1:
-                elim_frac = (initial_players - total_players) / (initial_players - 1)
-            overall_pct = progress_base + progress_scale * (elim_frac * 100.0)
             self.ui_event_queue.put({
                 "type": "progress",
-                "value": overall_pct,
-                "text": f"Hands: {hands_played} | Level: {level} | Players remaining: {total_players}"
+                "value": None,
+                "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
             })
 
             # Sleep to simulate pace
@@ -276,23 +282,34 @@ class TournamentSimulator:
                 break
 
             # Compute base and scale for progress values within this tournament
-            base_pct = (t_idx / max_t) * 100.0
-            scale_pct = (1.0 / max_t) * 100.0
+            # Progress bar will represent convergence, updated after each tournament.
+            self.ui_event_queue.put({"type": "progress", "value": None, "text": f"Tournament {t_idx + 1}/{max_t} started"})
 
-            # Emit tournament start progress
-            self.ui_event_queue.put({"type": "progress", "value": base_pct, "text": f"Tournament {t_idx + 1}/{max_t} started"})
+            result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
+            self.tournaments_run += 1
 
-            result = self.run_single_tournament(progress_base=base_pct, progress_scale=scale_pct)
-            # Map survivors to genomes
-            survivor_genomes = [self.trainer.population[p.genome_idx] for p in result["survivors"]]
+            # Select top 10 survivors by stack to highlight next tournament
+            survivors_sorted = sorted(result["survivors"], key=lambda p: p.stack, reverse=True)
+            top_survivors = survivors_sorted[:10]
+            self.highlight_genome_idxs = {p.genome_idx for p in top_survivors}
+
             # Advance evolution
             info = self.trainer.step()
+            # Initialize baseline spread if not set
+            if self.baseline_spread is None:
+                self.baseline_spread = info["fitness_spread"]
             # Replace top survivors by elite
+            survivor_genomes = [self.trainer.population[p.genome_idx] for p in top_survivors]
             self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"])
 
+            # Convergence progress: based on fitness spread reduction
+            current_spread = info["fitness_spread"]
+            conv_progress = 0.0
+            if self.baseline_spread and self.baseline_spread > 0:
+                conv_progress = max(0.0, min(100.0, ((self.baseline_spread - current_spread) / self.baseline_spread) * 100.0))
+
             # Update progress at end of tournament
-            end_pct = ((t_idx + 1) / max_t) * 100.0
-            self.ui_event_queue.put({"type": "progress", "value": end_pct, "text": f"Completed {t_idx + 1}/{max_t}"})
+            self.ui_event_queue.put({"type": "progress", "value": conv_progress, "text": f"Completed {t_idx + 1}/{max_t} | Convergence {conv_progress:0.1f}%"})
 
             # Convergence check
             if self.trainer.check_convergence(window=window, eps=eps):

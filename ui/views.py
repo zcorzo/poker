@@ -121,7 +121,7 @@ class TournamentView(ttk.Frame):
                 idx += 1
 
     def update_tables(self, tables):
-        # tables: list of lists of dicts: {"id":..., "stack":...}
+        # tables: list of lists of dicts: {"id":..., "stack":..., "highlight": bool}
         # Clear and rebuild labels per table
         for tf in self.table_frames:
             for child in tf.winfo_children():
@@ -135,11 +135,15 @@ class TournamentView(ttk.Frame):
                 if isinstance(pinfo, dict):
                     pid = pinfo.get("id")
                     stack = pinfo.get("stack", 0)
+                    highlight = bool(pinfo.get("highlight", False))
                     text = f"{pid}\n${int(stack)}"
                 else:
                     pid = pinfo
+                    highlight = False
                     text = str(pid)
-                lbl = ttk.Label(tf, text=text, relief=tk.GROOVE, width=8, anchor="center", justify="center")
+                # Use tk.Label to allow background color change for highlight
+                bg = "#c7f9cc" if highlight else None
+                lbl = tk.Label(tf, text=text, bg=bg, relief=tk.GROOVE, width=8, anchor="center", justify="center")
                 lbl.grid(row=(idx // 5), column=idx % 5, padx=2, pady=2)
                 self.player_labels[pid] = lbl
 
