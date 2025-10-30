@@ -158,28 +158,43 @@ class TournamentSimulator:
         return eliminated
 
     def reseat(self, tables: List[Table]) -> List[Table]:
-        # Flatten players and redistribute to keep tables balanced
-        all_players = []
+        """
+        Balance and break tables according to tournament rules:
+        - Keep tables as even as possible.
+        - Retire tables when overall player count no longer requires them.
+        - Target max players per table from config.
+        """
+        # Flatten all players preserving relative order
+        all_players: List[Player] = []
         for tbl in tables:
             all_players.extend(tbl.players)
-        # Compute target distribution
-        num_tables = len([t for t in tables if t is not None])
-        per_table = max(1, len(all_players) // num_tables)
-        new_tables = []
-        idx = 0
-        for t in range(num_tables):
-            plist = []
-            for _ in range(per_table):
-                if idx < len(all_players):
-                    plist.append(all_players[idx])
-                    idx += 1
-            new_tables.append(Table(id=t + 1, players=plist))
-        # Distribute remaining players one per table
+
+        max_per_table = int(self.cfg["players_per_table"])
+        total_players = len(all_players)
+        # Compute target active tables: ceil(players / max_per_table), at least 1
+        target_tables = max(1, math.ceil(total_players / max_per_table))
+
+        # If only one table remains necessary, collapse to final table
+        new_tables: List[Table] = [Table(id=i + 1, players=[]) for i in range(target_tables)]
+
+        # Distribute players round-robin to keep tables as even as possible
         ti = 0
-        while idx < len(all_players):
-            new_tables[ti % num_tables].players.append(all_players[idx])
-            idx += 1
+        for pl in all_players:
+            new_tables[ti % target_tables].players.append(pl)
             ti += 1
+
+        # Ensure we don't exceed max_per_table by rebalancing if needed (rare with round-robin)
+        for tbl in new_tables:
+            if len(tbl.players) > max_per_table:
+                overflow = tbl.players[max_per_table:]
+                tbl.players = tbl.players[:max_per_table]
+                # place overflow onto next tables with space
+                for pl in overflow:
+                    for dest in new_tables:
+                        if len(dest.players) < max_per_table:
+                            dest.players.append(pl)
+                            break
+
         return new_tables
 
     def run_single_tournament(self, progress_base: float, progress_scale: float) -> Dict:
