@@ -45,6 +45,8 @@ class TournamentSimulator:
         # Persistent player numbering: genome UID -> stable player_id, and global counter
         self.persistent_ids: Dict[str, int] = {}
         self.next_player_id: int = 1
+        # Survivor counts: number of tournaments a genome has survived (advanced)
+        self.survivor_counts: Dict[str, int] = {}
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -109,7 +111,8 @@ class TournamentSimulator:
         return tables
 
     def emit_tables(self, tables: List[Table]):
-        # Include cumulative bankroll in UI and emit best bankroll among current survivors
+        # Include cumulative bankroll in UI and emit best bankroll among current survivors.
+        # Color survivors red if they have advanced in multiple tournaments.
         table_view = []
         current_bankrolls = []
         for tbl in tables:
@@ -117,7 +120,9 @@ class TournamentSimulator:
             for p in tbl.players:
                 genome = self.trainer.population[p.genome_idx]
                 b = self.genome_bankroll.get(genome.uid, 0.0)
-                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": b})
+                advanced_count = self.survivor_counts.get(genome.uid, 0)
+                # highlight stays for top-10; red flag for multi-tournament survivors
+                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": b, "multi_survivor": advanced_count > 1})
                 current_bankrolls.append(b)
             table_view.append(row)
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
@@ -479,6 +484,9 @@ class TournamentSimulator:
             # Top-10 finisher UIDs from the tournament for advancement and highlight
             top10_uids = result.get("top10_uids", [])
             self.highlight_genome_idxs = set(top10_uids)
+            # Update survivor counts
+            for uid in top10_uids:
+                self.survivor_counts[uid] = self.survivor_counts.get(uid, 0) + 1
 
             # Rank current population without evolving to compute convergence
             info = self.trainer.rank_population()

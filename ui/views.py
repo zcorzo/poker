@@ -186,13 +186,15 @@ class TournamentView(ttk.Frame):
                     stack = pinfo.get("stack", 0)
                     bankroll = pinfo.get("bankroll", 0)
                     highlight = bool(pinfo.get("highlight", False))
+                    multi_survivor = bool(pinfo.get("multi_survivor", False))
                     text = f"{pid}\n${int(stack)}\nB:${int(bankroll)}"
                 else:
                     pid = pinfo
                     highlight = False
+                    multi_survivor = False
                     text = str(pid)
-                # Use tk.Label to allow background color change for highlight
-                bg = "#c7f9cc" if highlight else None
+                # Background: green for current highlighted top-10, red if survived multiple tournaments
+                bg = "#c7f9cc" if highlight else ( "#ffcccc" if multi_survivor else None )
                 lbl = tk.Label(tf, text=text, bg=bg, relief=tk.GROOVE, width=10, anchor="center", justify="center")
                 lbl.grid(row=(idx // 5), column=idx % 5, padx=2, pady=2)
                 self.player_labels[pid] = lbl
