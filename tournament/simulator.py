@@ -44,7 +44,7 @@ class TournamentSimulator:
         return tables
 
     def emit_tables(self, tables: List[Table]):
-        table_view = [[p.id for p in tbl.players] for tbl in tables]
+        table_view = [[{"id": p.id, "stack": p.stack} for p in tbl.players] for tbl in tables]
         self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
 
     def level_parameters(self, level: int) -> Dict:
@@ -55,10 +55,18 @@ class TournamentSimulator:
             ante = self.cfg["ante_amount_bb_fraction"] * bb
         return {"sb": sb, "bb": bb, "ante": ante}
 
+    def position_factor(self, idx: int, n: int) -> float:
+        # Early/middle/late simple mapping for aggression scaling
+        if idx < max(1, n // 3):
+            return 0.3
+        elif idx < max(2, 2 * n // 3):
+            return 0.7
+        return 1.0
+
     def play_hand(self, table: Table, level_params: Dict) -> Optional[int]:
         """
         Plays a simplified hand at a given table. Returns eliminated player id or None.
-        For now, betting logic is simplified; we deal cards, pick a winner by hand evaluation.
+        Adds simple betting logic based on genome aggression and position to accelerate eliminations.
         """
         if len(table.players) <= 1:
             return None
@@ -72,17 +80,40 @@ class TournamentSimulator:
         table.players = table.players[1:] + table.players[:1]
 
         # Collect antes
+        pot = 0.0
         if ante > 0.0:
             for pl in table.players:
                 paid = min(pl.stack, ante)
                 pl.stack -= paid
+                pot += paid
 
         # Blinds
         if len(table.players) >= 2:
             sb_player = table.players[0]
             bb_player = table.players[1]
-            sb_player.stack -= min(sb_player.stack, sb)
-            bb_player.stack -= min(bb_player.stack, bb)
+            sb_paid = min(sb_player.stack, sb)
+            bb_paid = min(bb_player.stack, bb)
+            sb_player.stack -= sb_paid
+            bb_player.stack -= bb_paid
+            pot += sb_paid + bb_paid
+
+        # Simple betting: each player commits extra chips based on aggression and position
+        n = len(table.players)
+        for idx, pl in enumerate(table.players):
+            g = self.trainer.population[pl.genome_idx]
+            pos_scale = self.position_factor(idx, n)
+            # Ensure a minimum commitment to drive eliminations
+            base_commit = bb * (0.5 + 0.8 * g.aggression) * pos_scale
+            # Occasional bluff commit
+            if self.rng.random() < min(0.6, g.bluff_freq + 0.3):
+                base_commit += bb * 0.5
+            # Short-stack shove behavior
+            if pl.stack < 5 * bb and self.rng.random() < 0.5:
+                commit = pl.stack
+            else:
+                commit = min(pl.stack, base_commit)
+            pl.stack -= commit
+            pot += commit
 
         # Deal cards
         deck = Deck(seed=self.rng.randint(0, 1_000_000))
@@ -92,7 +123,7 @@ class TournamentSimulator:
             hole_cards[pl.id] = deck.deal(2)
         board = deck.deal(5)
 
-        # Evaluate hands; split pot to winner(s)
+        # Evaluate hands; find winner(s)
         best_pid = None
         ties = []
         for pl in table.players:
@@ -108,8 +139,7 @@ class TournamentSimulator:
                     if pl.id not in ties:
                         ties.append(pl.id)
 
-        # Pot size approximated as sum of blinds + antes
-        pot = sb + bb + ante * len(table.players)
+        # Distribute pot to winner(s)
         if ties:
             share = pot / len(ties)
             for pl in table.players:
@@ -181,7 +211,7 @@ class TournamentSimulator:
             if eliminated_any:
                 tables = self.reseat(tables)
                 self.emit_tables(tables)
-                self.ui_event_queue.put({"type": "reseat", "tables": [[p.id for p in tbl.players] for tbl in tables]})
+                self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack} for p in tbl.players] for tbl in tables]})
 
             hands_played += 1
             # Blind level increase

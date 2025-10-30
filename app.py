@@ -73,8 +73,7 @@ class App(tk.Tk):
             trainer=self.trainer,
         )
 
-        # Update GUI for fresh tournament
-        self.tournament_view.build_tables(self.config_state["num_tables"], self.config_state["players_per_table"])
+        # Do not rebuild tables here to avoid layout jumping; simulator will emit initial table state
         self.stats_label.config(text="Running...")
         self.progress_var.set(0.0)
 
@@ -107,7 +106,7 @@ class App(tk.Tk):
                 etype = evt.get("type")
 
                 if etype == "update_tables":
-                    # evt: {"type":..., "tables": [[player_ids...], ...]}
+                    # evt: {"type":..., "tables": [[{"id":..., "stack":...}, ...], ...]}
                     self.tournament_view.update_tables(evt["tables"])
                 elif etype == "elimination":
                     # {"type":"elimination","player_id":int}
@@ -117,7 +116,9 @@ class App(tk.Tk):
                     self.tournament_view.update_tables(evt["tables"])
                 elif etype == "progress":
                     # {"type":"progress","value": float 0-100, "text": str}
-                    self.progress_var.set(evt.get("value", 0.0))
+                    val = evt.get("value")
+                    if val is not None:
+                        self.progress_var.set(val)
                     self.stats_label.config(text=evt.get("text", ""))
                 elif etype == "optimization_finished":
                     converged = evt.get("converged", False)
