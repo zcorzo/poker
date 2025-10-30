@@ -124,7 +124,7 @@ class TournamentView(ttk.Frame):
         ttk.Label(right_info, textvariable=self.best_bankroll_var).pack(side=tk.TOP, anchor="e")
 
         # Live payout projections
-        self.payout_tree = ttk.Treeview(right_info, columns=("player", "payout"), show="headings", height=6)
+        self.payout_tree = ttk.Treeview(right_info, columns=("player", "payout"), show="headings", height=10)
         self.payout_tree.heading("player", text="Player")
         self.payout_tree.heading("payout", text="Projected Payout")
         self.payout_tree.column("player", width=80, anchor="e")

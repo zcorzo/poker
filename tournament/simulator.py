@@ -31,14 +31,17 @@ class TournamentSimulator:
         self.trainer = trainer
         self.rng = random.Random(config.get("random_seed", None))
         # State for highlighting and stats
-        self.highlight_genome_idxs: set[int] = set()
+        self.highlight_genome_idxs: set[str] = set()
         self.cumulative_hands: int = 0
         self.tournaments_run: int = 0
         self.baseline_spread: Optional[float] = None  # for convergence progress
-        # Economy: cumulative bankroll per genome
-        self.genome_bankroll: Dict[int, float] = {}
+        # Economy: cumulative bankroll per genome (keyed by genome UID)
+        self.genome_bankroll: Dict[str, float] = {}
         # Player registry for quick lookup (id -> Player)
         self.players_by_id: Dict[int, Player] = {}
+        # Live payout locking when field reaches top-10
+        self.top10_lock_active: bool = False
+        self.locked_payouts: List[Dict] = []  # list of {"player_id":..., "uid":..., "payout":...}
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -286,6 +289,16 @@ class TournamentSimulator:
                     pl = self.players_by_id.get(elim)
                     if pl:
                         elimination_order.append(pl)
+                        # If in top-10 phase, lock payout for this elimination
+                        if self.top10_lock_active:
+                            idx_locked = len(self.locked_payouts)
+                            payout_idx = 9 - idx_locked
+                            distribution = self.cfg.get("payout_distribution", [])
+                            prize_pool = buy_in * float(initial_players)
+                            amt = prize_pool * float(distribution[payout_idx]) if 0 <= payout_idx < len(distribution) else 0.0
+                            genome = self.trainer.population[pl.genome_idx]
+                            self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt})
                         # Remove from registry
                         self.players_by_id.pop(elim, None)
                     self.ui_event_queue.put({"type": "elimination", "player_id": elim})
@@ -308,6 +321,11 @@ class TournamentSimulator:
                 level += 1
                 level_params = self.level_parameters(level)
 
+            # Activate payout locking when field reaches top-10
+            total_players = sum(len(t.players) for t in tables)
+            if not self.top10_lock_active and total_players <= 10:
+                self.top10_lock_active = True
+
             # Emit per-hand status (leave progress bar unchanged within tournament)
             total_players = sum(len(t.players) for t in tables)
             self.ui_event_queue.put({
@@ -316,7 +334,7 @@ class TournamentSimulator:
                 "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
             })
 
-            # Emit projected payouts live (based on current stacks)
+            # Emit projected payouts live (based on current stacks) with top-10 locking
             prize_pool = buy_in * float(initial_players)
             distribution = self.cfg.get("payout_distribution", [])
             # Build current leaderboard by stack
@@ -325,10 +343,26 @@ class TournamentSimulator:
                 for pl in tbl.players:
                     current_players.append(pl)
             current_players.sort(key=lambda p: p.stack, reverse=True)
+
             projections = []
-            for i in range(min(len(distribution), len(current_players))):
-                amt = prize_pool * float(distribution[i])
-                projections.append({"player_id": current_players[i].id, "payout": amt})
+            # First include locked payouts (players already eliminated during top-10 phase)
+            for lp in self.locked_payouts:
+                projections.append({"player_id": lp["player_id"], "payout": lp["payout"]})
+            # Remaining payouts for still-in players: assign highest remaining payouts to current leaders
+            remaining_slots = max(0, 10 - len(projections))
+            remaining_payouts = []
+            if distribution:
+                # Remaining payout indexes from tail backwards based on already locked count
+                for i in range(remaining_slots):
+                    idx = 9 - len(self.locked_payouts) - i
+                    if idx >= 0:
+                        remaining_payouts.append(prize_pool * float(distribution[idx]))
+            for i in range(min(remaining_slots, len(current_players))):
+                projections.append({"player_id": current_players[i].id, "payout": remaining_payouts[i] if i < len(remaining_payouts) else 0.0})
+            # Pad to always show 10 rows
+            while len(projections) < 10:
+                projections.append({"player_id": "-", "payout": 0.0})
+
             self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
 
             # Sleep to simulate pace
@@ -356,23 +390,45 @@ class TournamentSimulator:
         for pl in reversed(elimination_order):
             finishing_order.append(pl)
 
-        # Distribute payouts to top K based on distribution among finishing_order
-        top_k = min(len(distribution), len(finishing_order))
-        for i in range(top_k):
-            pl = finishing_order[i]
-            amt = prize_pool * float(distribution[i])
-            # Map to genome uid
-            genome = self.trainer.population[pl.genome_idx]
-            self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+        # Distribute payouts: if top-10 locking was active, pay remaining prizes to final placements
+        if self.top10_lock_active:
+            locked_count = len(self.locked_payouts)
+            # Pay remaining prizes to final survivors (winner first)
+            for i in range(min(10 - locked_count, len(survivors))):
+                pl = survivors_sorted[i]
+                idx = i  # winner gets index 0, etc.
+                amt = prize_pool * float(distribution[idx]) if idx < len(distribution) else 0.0
+                genome = self.trainer.population[pl.genome_idx]
+                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+        else:
+            # No locking (field never reached 10), pay top-10 by finishing order
+            top_k = min(len(distribution), len(finishing_order))
+            for i in range(top_k):
+                pl = finishing_order[i]
+                amt = prize_pool * float(distribution[i])
+                # Map to genome uid
+                genome = self.trainer.population[pl.genome_idx]
+                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
 
         # Emit best bankroll for dashboard
         best_amt = max(self.genome_bankroll.values()) if self.genome_bankroll else 0.0
         self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amt})
 
+        # Prepare top-10 finisher UIDs for advancement (locked payouts first, then remaining survivors)
+        top10_uids: List[str] = [lp["uid"] for lp in self.locked_payouts][:10]
+        if len(top10_uids) < 10:
+            for pl in survivors_sorted:
+                uid = self.trainer.population[pl.genome_idx].uid
+                if uid not in top10_uids:
+                    top10_uids.append(uid)
+                if len(top10_uids) >= 10:
+                    break
+
         return {
             "survivors": survivors,
             "hands_played": hands_played,
             "final_tables": tables,
+            "top10_uids": top10_uids,
         }
 
     def run_optimization(self):
@@ -389,18 +445,20 @@ class TournamentSimulator:
             result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
             self.tournaments_run += 1
 
-            # Select top 10 survivors by stack to highlight next tournament (store genome UIDs)
-            survivors_sorted = sorted(result["survivors"], key=lambda p: p.stack, reverse=True)
-            top_survivors = survivors_sorted[:10]
-            self.highlight_genome_idxs = {self.trainer.population[p.genome_idx].uid for p in top_survivors}
+            # Top-10 finisher UIDs from the tournament for advancement and highlight
+            top10_uids = result.get("top10_uids", [])
+            self.highlight_genome_idxs = set(top10_uids)
 
             # Rank current population without evolving to compute convergence
             info = self.trainer.rank_population()
             # Initialize baseline spread if not set
             if self.baseline_spread is None:
                 self.baseline_spread = info["fitness_spread"]
-            # Replace population using survivors to ensure they advance
-            survivor_genomes = [self.trainer.population[p.genome_idx] for p in top_survivors]
+
+            # Replace population ensuring top-10 advance
+            # Map UIDs to genomes in current population
+            uid_to_genome = {g.uid: g for g in self.trainer.population}
+            survivor_genomes = [uid_to_genome[uid] for uid in top10_uids if uid in uid_to_genome]
             self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"])
 
             # Convergence progress: based on fitness spread reduction
