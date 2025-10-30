@@ -80,9 +80,12 @@ class TournamentView(ttk.Frame):
         self.table_frames = []
         self.player_labels = {}  # player_id -> label ref
 
+        # Use grid to anchor everything to the top
+        self.grid_columnconfigure(0, weight=1)
+
         # Controls
         ctrl = ttk.Frame(self)
-        ctrl.pack(fill=tk.X, padx=0, pady=0)
+        ctrl.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         ttk.Button(ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2, pady=0)
         ttk.Button(ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2, pady=0)
 
@@ -90,9 +93,9 @@ class TournamentView(ttk.Frame):
         self.best_bankroll_var = tk.StringVar(value="Best bankroll: $0")
         ttk.Label(ctrl, textvariable=self.best_bankroll_var).pack(side=tk.RIGHT, padx=6)
 
-        # Tables container (no vertical expand to avoid extra top/bottom gray space)
+        # Tables container anchored at top
         self.canvas = ttk.Frame(self)
-        self.canvas.pack(fill=tk.X, expand=False, padx=0, pady=0)
+        self.canvas.grid(row=1, column=0, sticky="n", padx=0, pady=0)
 
     def build_tables(self, num_tables, players_per_table):
         # Clear old frames

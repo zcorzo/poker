@@ -37,6 +37,8 @@ class TournamentSimulator:
         self.baseline_spread: Optional[float] = None  # for convergence progress
         # Economy: cumulative bankroll per genome
         self.genome_bankroll: Dict[int, float] = {}
+        # Player registry for quick lookup (id -> Player)
+        self.players_by_id: Dict[int, Player] = {}
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -46,12 +48,14 @@ class TournamentSimulator:
             players = []
             for p in range(self.cfg["players_per_table"]):
                 genome_idx = (pid - 1) % genomes_per_player
-                players.append(Player(
+                pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
                     genome_idx=genome_idx,
                     highlight=(genome_idx in self.highlight_genome_idxs)
-                ))
+                )
+                players.append(pl)
+                self.players_by_id[pid] = pl
                 pid += 1
             tables.append(Table(id=t + 1, players=players))
         return tables
@@ -207,6 +211,12 @@ class TournamentSimulator:
                             dest.players.append(pl)
                             break
 
+        # Rebuild registry
+        self.players_by_id = {}
+        for tbl in new_tables:
+            for pl in tbl.players:
+                self.players_by_id[pl.id] = pl
+
         return new_tables
 
     def run_single_tournament(self, progress_base: float, progress_scale: float) -> Dict:
@@ -241,11 +251,13 @@ class TournamentSimulator:
             for tbl in tables:
                 elim = self.play_hand(tbl, level_params)
                 if elim is not None:
-                    # Find eliminated player object (we lost direct ref after filtering, so rebuild from prior table snapshot)
-                    # Here, we only have player id; maintain eliminated record as minimal info
                     eliminated_any = True
-                    # We cannot retrieve Player obj after removal; append minimal record
-                    elimination_order.append(Player(id=elim, stack=0.0, genome_idx=0, highlight=False))
+                    # Lookup full player info from registry
+                    pl = self.players_by_id.get(elim)
+                    if pl:
+                        elimination_order.append(pl)
+                        # Remove from registry
+                        self.players_by_id.pop(elim, None)
                     self.ui_event_queue.put({"type": "elimination", "player_id": elim})
 
             # Remove empty tables
@@ -289,17 +301,15 @@ class TournamentSimulator:
         # Economy: distribute prize pool among top finishers
         prize_pool = buy_in * float(initial_players)
         distribution = self.cfg.get("payout_distribution", [])
-        # Build final finishing order: winner(s) first, then last 9 eliminations reversed
+
+        # Build final finishing order: winner(s) first, then eliminated players reversed (last out gets higher place)
         finishing_order: List[Player] = []
-        # Winner is the last remaining player if exists
         if survivors:
-            # sort survivors by stack descending to pick winner; in our stop criteria there should be 1
             survivors_sorted = sorted(survivors, key=lambda p: p.stack, reverse=True)
             finishing_order.extend(survivors_sorted)
-        # Add eliminated players in reverse elimination order (last out is higher placement)
-        # Note: we lost genome_idx for eliminated players in quick record above; improve by tracking genome_idx on elimination
-        # Fix: track genome_idx at elimination by scanning tables before removal; to keep it simple, skip payouts to unknown genome indices
-        # Here, we will not attribute payouts to eliminated players due to missing genome_idx; this will be corrected below in run_optimization using survivors.
+        # Append eliminated players in reverse order
+        for pl in reversed(elimination_order):
+            finishing_order.append(pl)
 
         # Distribute payouts to top K based on distribution among finishing_order
         top_k = min(len(distribution), len(finishing_order))
