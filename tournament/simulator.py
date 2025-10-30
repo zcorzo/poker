@@ -466,6 +466,7 @@ class TournamentSimulator:
         max_t = int(self.cfg["optimization_max_tournaments"])
         window = int(self.cfg["optimization_window"])
         eps = float(self.cfg["optimization_convergence_eps"])
+        patience = int(self.cfg.get("optimization_patience_tournaments", 100))
         for t_idx in range(max_t):
             if self.stop_event.is_set():
                 break
@@ -514,6 +515,11 @@ class TournamentSimulator:
                 best = self.trainer.best_ranges()
                 self.ui_event_queue.put({"type": "progress", "value": 100.0, "text": "Converged"})
                 return True, best
+
+            # Patience early stop: stop if we've reached the configured patience count without convergence
+            if (t_idx + 1) >= patience:
+                best = self.trainer.best_ranges()
+                return False, best
 
         best = self.trainer.best_ranges()
         return False, best

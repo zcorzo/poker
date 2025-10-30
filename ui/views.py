@@ -50,6 +50,7 @@ class ConfigView(ttk.Frame):
         self._add_entry(row, "Max tournaments", "optimization_max_tournaments", cfg["optimization_max_tournaments"]); row += 1
         self._add_entry(row, "Convergence epsilon", "optimization_convergence_eps", cfg["optimization_convergence_eps"]); row += 1
         self._add_entry(row, "Convergence window", "optimization_window", cfg["optimization_window"]); row += 1
+        self._add_entry(row, "Patience (tournaments)", "optimization_patience_tournaments", cfg.get("optimization_patience_tournaments", 100)); row += 1
         self._add_check(row, "Reset optimization", "reset_optimization", cfg.get("reset_optimization", False)); row += 1
         self._add_entry(row, "Random seed", "random_seed", cfg["random_seed"]); row += 1
 

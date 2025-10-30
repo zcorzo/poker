@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
     "optimization_max_tournaments": 50,
     "optimization_convergence_eps": 0.02,  # threshold for convergence of ranges
     "optimization_window": 5,         # rolling window to check stability
+    "optimization_patience_tournaments": 100,  # stop early if no convergence after this many tournaments
     "reset_optimization": False,
     "random_seed": 42,
 
@@ -28,3 +29,4 @@ DEFAULT_CONFIG = {
 # - Blinds/antes: modeled per-hand level increases; configurable to match typical tournament structures.
 # - Economy: Each player pays buy_in at tournament start (cumulative bankroll decreases). Prize pool equals total buy-ins.
 #   Top 10 receive payouts according to payout_distribution. You can customize these via the Configuration tab.
+# - Optimization: The optimizer will stop early if it hasn't converged after 'optimization_patience_tournaments'.
