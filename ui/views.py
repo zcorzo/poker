@@ -132,14 +132,19 @@ class TournamentView(ttk.Frame):
         # Dedicated tables container to keep layout stable and avoid jumping
         self.tables_container = ttk.Frame(self, style="NoPad.TFrame")
         self.tables_container.pack(side=tk.TOP, fill=tk.X, expand=False, padx=0, pady=0)
-        # Use a Canvas with a fixed height to anchor content at the top
+        # Use a Canvas with a fixed height to anchor content at the top and add a vertical scrollbar
         self.tables_canvas = tk.Canvas(self.tables_container, height=420, borderwidth=0, highlightthickness=0)
-        self.tables_canvas.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False)
+        self.tables_canvas.pack(side=tk.LEFT, anchor="n", fill=tk.X, expand=False)
+        self.tables_scroll = ttk.Scrollbar(self.tables_container, orient="vertical", command=self.tables_canvas.yview)
+        self.tables_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tables_canvas.configure(yscrollcommand=self.tables_scroll.set)
         # Inner frame inside the canvas where tables are built
         self.canvas_inner = ttk.Frame(self.tables_canvas, style="NoPad.TFrame")
         self.tables_canvas.create_window((0, 0), window=self.canvas_inner, anchor="nw")
-        # Keep scrollregion in sync (even if we don't show scrollbars)
+        # Keep scrollregion in sync
         self.canvas_inner.bind("<Configure>", lambda e: self.tables_canvas.configure(scrollregion=self.tables_canvas.bbox("all")))
+        # Mouse wheel scrolling (Windows)
+        self.tables_canvas.bind_all("<MouseWheel>", lambda e: self.tables_canvas.yview_scroll(-1*(e.delta//120), "units"))
 
     def clear_payouts(self):
         # Clear all rows in the payout projection tree
