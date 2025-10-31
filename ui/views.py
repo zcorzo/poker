@@ -120,12 +120,14 @@ class TournamentView(ttk.Frame):
         ttk.Label(right_info, textvariable=self.best_bankroll_var).pack(side=tk.TOP, anchor="e")
 
         # Live payout projections (ranked 1..10, winner at top)
-        self.payout_tree = ttk.Treeview(right_info, columns=("rank", "player", "payout"), show="headings", height=10)
-        self.payout_tree.heading("rank", text="#")
+        self.payout_tree = ttk.Treeview(right_info, columns=("place", "player", "stack", "payout"), show="headings", height=10)
+        self.payout_tree.heading("place", text="Place")
         self.payout_tree.heading("player", text="Player")
+        self.payout_tree.heading("stack", text="Stack")
         self.payout_tree.heading("payout", text="Projected Payout")
-        self.payout_tree.column("rank", width=30, anchor="e")
+        self.payout_tree.column("place", width=50, anchor="e")
         self.payout_tree.column("player", width=80, anchor="e")
+        self.payout_tree.column("stack", width=80, anchor="e")
         self.payout_tree.column("payout", width=120, anchor="e")
         self.payout_tree.pack(side=tk.TOP, anchor="e")
 
@@ -224,12 +226,13 @@ class TournamentView(ttk.Frame):
             self.best_bankroll_var.set(f"Best bankroll: #{player_id} ${int(amount)}")
 
     def update_payouts(self, projections):
-        # projections: list in rank order: [{"player_id":..., "payout":...}, ...] length 10
+        # projections: list in rank order: [{"player_id":..., "payout":..., "stack":...}, ...] length 10
         # refresh treeview
         for i in self.payout_tree.get_children():
             self.payout_tree.delete(i)
         for rank, item in enumerate(projections, start=1):
-            self.payout_tree.insert("", "end", values=(rank, item["player_id"], f"${int(item['payout'])}"))
+            stack_val = item.get("stack", 0)
+            self.payout_tree.insert("", "end", values=(rank, item["player_id"], int(stack_val), f"${int(item['payout'])}"))
 
     def eliminate_player(self, player_id):
         lbl = self.player_labels.get(player_id)

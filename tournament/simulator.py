@@ -336,8 +336,8 @@ class TournamentSimulator:
                             amt = prize_pool * float(distribution[payout_idx]) if 0 <= payout_idx < len(distribution) else 0.0
                             genome = self.trainer.population[pl.genome_idx]
                             self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
-                            # Store rank (1..10) for locked payout rows
-                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt, "rank": payout_idx + 1})
+                            # Store rank (1..10) for locked payout rows, stack is 0 for eliminated
+                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt, "rank": payout_idx + 1, "stack": 0})
                         # Remove from registry
                         self.players_by_id.pop(elim, None)
                     self.ui_event_queue.put({"type": "elimination", "player_id": elim})
@@ -384,7 +384,7 @@ class TournamentSimulator:
             current_players.sort(key=lambda p: p.stack, reverse=True)
 
             # Build rank-based projections 1..10 (winner at top)
-            rank_rows = {lp.get("rank", 10 - i): {"player_id": lp["player_id"], "payout": lp["payout"]} for i, lp in enumerate(self.locked_payouts)}
+            rank_rows = {lp.get("rank", 10 - i): {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)} for i, lp in enumerate(self.locked_payouts)}
             leader_idx = 0
             for rank in range(1, 11):
                 if rank in rank_rows:
@@ -394,9 +394,9 @@ class TournamentSimulator:
                     pl = current_players[leader_idx]
                     leader_idx += 1
                     amt = prize_pool * float(distribution[rank - 1]) if (rank - 1) < len(distribution) else 0.0
-                    rank_rows[rank] = {"player_id": pl.id, "payout": amt}
+                    rank_rows[rank] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
                 else:
-                    rank_rows[rank] = {"player_id": "-", "payout": 0.0}
+                    rank_rows[rank] = {"player_id": "-", "payout": 0.0, "stack": 0}
 
             # Emit in rank order (winner at top)
             projections = [rank_rows[rank] for rank in range(1, 11)]
