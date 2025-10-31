@@ -11,7 +11,7 @@ from ai.training import EvolutionTrainer
 
 @dataclass
 class Player:
-    id: int
+    id: str  # persistent ID: "<tournament>-<seq:02d>"
     stack: float
     genome_idx: int  # index into trainer.population
     highlight: bool = False  # mark survivors carried to next tournament
@@ -42,9 +42,11 @@ class TournamentSimulator:
         # Live payout locking when field reaches top-10
         self.top10_lock_active: bool = False
         self.locked_payouts: List[Dict] = []  # list of {"player_id":..., "uid":..., "payout":...}
-        # Persistent player numbering: genome UID -> stable player_id, and global counter
-        self.persistent_ids: Dict[str, int] = {}
-        self.next_player_id: int = 1
+        # Persistent player numbering: genome UID -> stable player_id string "<tournament>-<seq:02d>"
+        self.persistent_ids: Dict[str, str] = {}
+        # Current tournament index and per-tournament assignment counter
+        self.current_tournament: int = 1
+        self.tournament_seq_counter: int = 1
         # Survivor counts: number of tournaments a genome has survived (advanced)
         self.survivor_counts: Dict[str, int] = {}
 
@@ -67,19 +69,19 @@ class TournamentSimulator:
             if highlighted_genomes:
                 g = highlighted_genomes.pop(0)
                 genome_idx = pop.index(g)
-                # Assign persistent player id
+                # Assign persistent player id "<tournament>-<seq:02d>"
                 pid = self.persistent_ids.get(g.uid)
                 if pid is None:
-                    pid = self.next_player_id
+                    pid = f"{self.current_tournament}-{self.tournament_seq_counter:02d}"
                     self.persistent_ids[g.uid] = pid
-                    self.next_player_id += 1
+                    self.tournament_seq_counter += 1
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
                     genome_idx=genome_idx,
                     highlight=True
                 )
-                # Do not reset genome_bankroll here; it persists across tournaments
+                # Do not reset bankroll here; it persists
                 players.append(pl)
                 self.players_by_id[pid] = pl
 
@@ -90,19 +92,19 @@ class TournamentSimulator:
                     other_genomes = pop[:]  # fallback to entire population
                 g = other_genomes.pop(0)
                 genome_idx = pop.index(g)
-                # Assign persistent player id
+                # Assign persistent player id "<tournament>-<seq:02d>"
                 pid = self.persistent_ids.get(g.uid)
                 if pid is None:
-                    pid = self.next_player_id
+                    pid = f"{self.current_tournament}-{self.tournament_seq_counter:02d}"
                     self.persistent_ids[g.uid] = pid
-                    self.next_player_id += 1
+                    self.tournament_seq_counter += 1
                 pl = Player(
                     id=pid,
                     stack=self.cfg["initial_bank"],
                     genome_idx=genome_idx,
                     highlight=False
                 )
-                # Do not reset genome_bankroll here; it persists across tournaments
+                # Do not reset bankroll here; it persists
                 players.append(pl)
                 self.players_by_id[pid] = pl
 
@@ -489,6 +491,8 @@ class TournamentSimulator:
             self.ui_event_queue.put({"type": "payout_projection", "projections": []})
 
             # Start tournament
+            self.current_tournament = t_idx + 1
+            self.tournament_seq_counter = 1
             self.ui_event_queue.put({"type": "progress", "value": None, "text": f"Tournament {t_idx + 1}/{max_t} started"})
 
             result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
