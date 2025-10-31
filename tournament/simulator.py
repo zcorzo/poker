@@ -383,23 +383,30 @@ class TournamentSimulator:
                     current_players.append(pl)
             current_players.sort(key=lambda p: p.stack, reverse=True)
 
-            # Build rank-based projections 1..10 (winner at top)
-            rank_rows = {lp.get("rank", 10 - i): {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)} for i, lp in enumerate(self.locked_payouts)}
-            leader_idx = 0
-            for rank in range(1, 11):
-                if rank in rank_rows:
-                    continue  # already locked
-                # Assign projected payout for this rank to next leader if available
-                if leader_idx < len(current_players):
-                    pl = current_players[leader_idx]
-                    leader_idx += 1
-                    amt = prize_pool * float(distribution[rank - 1]) if (rank - 1) < len(distribution) else 0.0
-                    rank_rows[rank] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
+            # Build rank-based projections 1..10 (winner at top) robustly
+            rank_rows: Dict[int, Dict] = {}
+            # Insert locked payouts with their exact ranks
+            for lp in self.locked_payouts:
+                r = int(lp.get("rank", 0))
+                if 1 <= r <= 10:
+                    rank_rows[r] = {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)}
+
+            # Determine remaining ranks that are not locked
+            remaining_ranks = [r for r in range(1, 11) if r not in rank_rows]
+
+            # Map current leaders to remaining ranks in order
+            leaders = current_players[:len(remaining_ranks)]
+            for i, r in enumerate(remaining_ranks):
+                if i < len(leaders):
+                    pl = leaders[i]
+                    amt = prize_pool * float(distribution[r - 1]) if (r - 1) < len(distribution) else 0.0
+                    rank_rows[r] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
                 else:
-                    rank_rows[rank] = {"player_id": "-", "payout": 0.0, "stack": 0}
+                    # No player available for this rank
+                    rank_rows[r] = {"player_id": "-", "payout": 0.0, "stack": 0}
 
             # Emit in rank order (winner at top)
-            projections = [rank_rows[rank] for rank in range(1, 11)]
+            projections = [rank_rows.get(rank, {"player_id": "-", "payout": 0.0, "stack": 0}) for rank in range(1, 11)]
             self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
 
             # Sleep to simulate pace
