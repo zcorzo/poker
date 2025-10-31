@@ -49,6 +49,8 @@ class TournamentSimulator:
         self.tournament_seq_counter: int = 1
         # Survivor counts: number of tournaments a genome has survived (advanced)
         self.survivor_counts: Dict[str, int] = {}
+        # UI throttling
+        self._last_ui_emit_ts: float = 0.0
 
     def initial_tables(self) -> List[Table]:
         tables = []
@@ -347,11 +349,13 @@ class TournamentSimulator:
             # Reseat to balance if any elimination occurred
             if eliminated_any:
                 tables = self.reseat(tables)
+                # Force an immediate UI emit after reseat
                 self.emit_tables(tables)
+                self._last_ui_emit_ts = time.time()
                 self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack, "highlight": p.highlight} for p in tbl.players] for tbl in tables]})
             else:
-                # No reseat, still emit updated stacks so UI reflects chip movements
-                self.emit_tables(tables)
+                # No reseat; UI emit will be throttled below
+                pass
 
             hands_played += 1
             self.cumulative_hands += 1
@@ -365,49 +369,55 @@ class TournamentSimulator:
             if not self.top10_lock_active and total_players <= 10:
                 self.top10_lock_active = True
 
-            # Emit per-hand status (leave progress bar unchanged within tournament)
-            total_players = sum(len(t.players) for t in tables)
-            self.ui_event_queue.put({
-                "type": "progress",
-                "value": None,
-                "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
-            })
+            # Throttle UI updates to avoid overwhelming the main thread at very fast hand speeds
+            now_ts = time.time()
+            min_interval = float(self.cfg.get("ui_min_update_interval_sec", 0.05))
+            if (now_ts - self._last_ui_emit_ts) >= min_interval:
+                # Emit tables
+                self.emit_tables(tables)
+                # Status line
+                self.ui_event_queue.put({
+                    "type": "progress",
+                    "value": None,
+                    "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
+                })
+                # Projected payouts
+                prize_pool = buy_in * float(initial_players)
+                distribution = self.cfg.get("payout_distribution", [])
+                # Build current leaderboard by stack
+                current_players = []
+                for tbl in tables:
+                    for pl in tbl.players:
+                        current_players.append(pl)
+                current_players.sort(key=lambda p: p.stack, reverse=True)
 
-            # Emit projected payouts live (based on current stacks) with top-10 locking
-            prize_pool = buy_in * float(initial_players)
-            distribution = self.cfg.get("payout_distribution", [])
-            # Build current leaderboard by stack
-            current_players = []
-            for tbl in tables:
-                for pl in tbl.players:
-                    current_players.append(pl)
-            current_players.sort(key=lambda p: p.stack, reverse=True)
+                # Build rank-based projections 1..10 (winner at top) robustly
+                rank_rows: Dict[int, Dict] = {}
+                # Insert locked payouts with their exact ranks
+                for lp in self.locked_payouts:
+                    r = int(lp.get("rank", 0))
+                    if 1 <= r <= 10:
+                        rank_rows[r] = {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)}
 
-            # Build rank-based projections 1..10 (winner at top) robustly
-            rank_rows: Dict[int, Dict] = {}
-            # Insert locked payouts with their exact ranks
-            for lp in self.locked_payouts:
-                r = int(lp.get("rank", 0))
-                if 1 <= r <= 10:
-                    rank_rows[r] = {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)}
+                # Determine remaining ranks that are not locked
+                remaining_ranks = [r for r in range(1, 11) if r not in rank_rows]
 
-            # Determine remaining ranks that are not locked
-            remaining_ranks = [r for r in range(1, 11) if r not in rank_rows]
+                # Map current leaders to remaining ranks in order
+                leaders = current_players[:len(remaining_ranks)]
+                for i, r in enumerate(remaining_ranks):
+                    if i < len(leaders):
+                        pl = leaders[i]
+                        amt = prize_pool * float(distribution[r - 1]) if (r - 1) < len(distribution) else 0.0
+                        rank_rows[r] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
+                    else:
+                        # No player available for this rank
+                        rank_rows[r] = {"player_id": "-", "payout": 0.0, "stack": 0}
 
-            # Map current leaders to remaining ranks in order
-            leaders = current_players[:len(remaining_ranks)]
-            for i, r in enumerate(remaining_ranks):
-                if i < len(leaders):
-                    pl = leaders[i]
-                    amt = prize_pool * float(distribution[r - 1]) if (r - 1) < len(distribution) else 0.0
-                    rank_rows[r] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
-                else:
-                    # No player available for this rank
-                    rank_rows[r] = {"player_id": "-", "payout": 0.0, "stack": 0}
-
-            # Emit in rank order (winner at top)
-            projections = [rank_rows.get(rank, {"player_id": "-", "payout": 0.0, "stack": 0}) for rank in range(1, 11)]
-            self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
+                # Emit in rank order (winner at top)
+                projections = [rank_rows.get(rank, {"player_id": "-", "payout": 0.0, "stack": 0}) for rank in range(1, 11)]
+                self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
+                # Update timestamp
+                self._last_ui_emit_ts = now_ts
 
             # Sleep to simulate pace
             time.sleep(max(0.0, float(self.cfg["hand_speed_sec"])))

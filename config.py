@@ -10,6 +10,7 @@ DEFAULT_CONFIG = {
     "blind_increase_hands": 70,       # slower blind progression to reduce variance
     "blind_increase_multiplier": 1.35,# gentler increase across levels
     "hand_speed_sec": 0.1,            # target pace: 0.1 sec per hand
+    "ui_min_update_interval_sec": 0.05,  # throttle UI updates to at most 20 FPS
 
     # Optimization settings
     "optimization_max_tournaments": 50,
