@@ -191,11 +191,11 @@ class TournamentSimulator:
             pos_scale = self.position_factor(idx, n)
             # Ensure a minimum commitment to drive eliminations
             base_commit = bb * (0.5 + 0.8 * g.aggression) * pos_scale
-            # Occasional bluff commit
-            if self.rng.random() < min(0.6, g.bluff_freq + 0.3):
-                base_commit += bb * 0.5
-            # Short-stack shove behavior
-            if pl.stack < 5 * bb and self.rng.random() < 0.5:
+            # Occasional bluff commit (dampened)
+            if self.rng.random() < min(0.5, g.bluff_freq + 0.2):
+                base_commit += bb * 0.3
+            # Short-stack shove behavior (dampened)
+            if pl.stack < 4 * bb and self.rng.random() < 0.35:
                 commit = pl.stack
             else:
                 commit = min(pl.stack, base_commit)
@@ -512,14 +512,13 @@ class TournamentSimulator:
             for uid in top10_uids:
                 self.survivor_counts[uid] = self.survivor_counts.get(uid, 0) + 1
 
-            # Apply tournament-driven scores: net winnings minus buy-ins per genome UID
-            # Use locked payouts and survivors distribution to compute per-UID score
-            uid_scores: Dict[str, float] = {}
+            # Apply tournament-driven scores: blend normalized net winnings and rank points
+            uid_net: Dict[str, float] = {}
             prize_pool = float(self.cfg.get("buy_in", 0.0)) * float(sum(len(t.players) for t in result.get("final_tables", [])))
             distribution = self.cfg.get("payout_distribution", [])
             # Locked payouts
             for lp in self.locked_payouts:
-                uid_scores[lp["uid"]] = uid_scores.get(lp["uid"], 0.0) + float(lp["payout"])
+                uid_net[lp["uid"]] = uid_net.get(lp["uid"], 0.0) + float(lp["payout"])
             # Survivors payouts (winner-first) if needed
             final_survivors = result.get("survivors", [])
             if final_survivors:
@@ -529,12 +528,30 @@ class TournamentSimulator:
                     pl = survivors_sorted[i]
                     uid = self.trainer.population[pl.genome_idx].uid
                     amt = prize_pool * float(distribution[i]) if i < len(distribution) else 0.0
-                    uid_scores[uid] = uid_scores.get(uid, 0.0) + amt
+                    uid_net[uid] = uid_net.get(uid, 0.0) + amt
             # Subtract buy-in for all entrants
             entrants_uids = [self.trainer.population[p.genome_idx].uid for p in final_survivors] + [lp["uid"] for lp in self.locked_payouts]
             buy_in = float(self.cfg.get("buy_in", 0.0))
             for uid in set(entrants_uids):
-                uid_scores[uid] = uid_scores.get(uid, 0.0) - buy_in
+                uid_net[uid] = uid_net.get(uid, 0.0) - buy_in
+
+            # Rank points: winner 10 down to 1 for 10th, zero otherwise
+            uid_rank: Dict[str, float] = {}
+            # Determine full top-10 order: locked (from 10th upward) plus survivors by stack
+            rank_order_uids: List[str] = [lp["uid"] for lp in sorted(self.locked_payouts, key=lambda x: x.get("rank", 10), reverse=False)]
+            for pl in sorted(final_survivors, key=lambda p: p.stack, reverse=True):
+                uid = self.trainer.population[pl.genome_idx].uid
+                if uid not in rank_order_uids and len(rank_order_uids) < 10:
+                    rank_order_uids.append(uid)
+            for pos, uid in enumerate(rank_order_uids[:10], start=1):
+                uid_rank[uid] = float(11 - pos) / 10.0  # 1.0 for first, 0.1 for tenth
+
+            # Blend normalized net winnings ( / prize_pool ) and rank score
+            uid_scores: Dict[str, float] = {}
+            for uid in set(list(uid_net.keys()) + list(uid_rank.keys())):
+                net_norm = (uid_net.get(uid, 0.0) / prize_pool) if prize_pool > 0 else 0.0
+                rank_score = uid_rank.get(uid, 0.0)
+                uid_scores[uid] = 0.5 * net_norm + 0.5 * rank_score
 
             # Update trainer scores
             self.trainer.apply_tournament_scores(uid_scores)

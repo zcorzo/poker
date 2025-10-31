@@ -32,7 +32,7 @@ class SimpleRangeNet(nn.Module):
 
 
 class EvolutionTrainer:
-    def __init__(self, population_size: int = 100, elite_fraction: float = 0.2, seed: Optional[int] = None):
+    def __init__(self, population_size: int = 100, elite_fraction: float = 0.3, seed: Optional[int] = None):
         self.rng = random.Random(seed)
         self.population_size = population_size
         self.elite_fraction = elite_fraction
@@ -40,7 +40,7 @@ class EvolutionTrainer:
         self.history: List[Dict] = []
         # Persistent performance scores keyed by genome UID (exponential moving average)
         self.fitness_scores: Dict[str, float] = {}
-        self.ema_alpha: float = 0.4  # smoothing for tournament scores
+        self.ema_alpha: float = 0.6  # stronger weighting for latest tournament
         self.model = SimpleRangeNet() if torch and nn else None
         if torch and nn:
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
@@ -77,7 +77,6 @@ class EvolutionTrainer:
                 scores.append(self.fitness_scores[uid])
             else:
                 if self.model:
-                    # lightweight forward pass
                     x = torch.tensor([self.encode_genome(g)], dtype=torch.float32)
                     y = self.model(x).squeeze().detach().item()
                     scores.append(float(y))
@@ -87,7 +86,7 @@ class EvolutionTrainer:
 
     def apply_tournament_scores(self, uid_to_score: Dict[str, float]) -> None:
         """
-        Update fitness_scores with tournament performance (e.g., net winnings or placement scores).
+        Update fitness_scores with tournament performance (normalized 0..1 blended scores).
         Uses EMA to accumulate stability across tournaments.
         """
         for uid, score in uid_to_score.items():
@@ -97,7 +96,7 @@ class EvolutionTrainer:
             else:
                 self.fitness_scores[uid] = (1 - self.ema_alpha) * prev + self.ema_alpha * score
 
-    def evolve(self, survivors: List[Genome], mutate_rate: float = 0.05, mutate_scale: float = 0.05) -> None:
+    def evolve(self, survivors: List[Genome], mutate_rate: float = 0.01, mutate_scale: float = 0.01) -> None:
         # Combine survivors with new children to refill population
         elite = survivors[:max(1, int(self.elite_fraction * self.population_size))]
         new_pop = []

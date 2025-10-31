@@ -6,9 +6,9 @@ DEFAULT_CONFIG = {
     "big_blind": 10,
     "ante_enabled": True,
     "ante_start_level": 3,            # introduce ante at level 3 (less aggressive)
-    "ante_amount_bb_fraction": 0.2,   # ante = 0.2 BB (less aggressive than 0.25)
-    "blind_increase_hands": 50,       # increase blinds every 50 hands (less aggressive)
-    "blind_increase_multiplier": 1.5, # 1.5x per level (typical tournament progression)
+    "ante_amount_bb_fraction": 0.2,   # ante = 0.2 BB
+    "blind_increase_hands": 70,       # slower blind progression to reduce variance
+    "blind_increase_multiplier": 1.35,# gentler increase across levels
     "hand_speed_sec": 0.1,            # target pace: 0.1 sec per hand
 
     # Optimization settings
