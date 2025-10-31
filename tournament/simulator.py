@@ -1,0 +1,603 @@
+import time
+import math
+import random
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+from poker.deck import Deck
+from poker.handeval import compare_hands
+from ai.training import EvolutionTrainer
+
+
+@dataclass
+class Player:
+    id: str  # persistent ID: "<tournament>-<seq:02d>"
+    stack: float
+    genome_idx: int  # index into trainer.population
+    highlight: bool = False  # mark survivors carried to next tournament
+
+
+@dataclass
+class Table:
+    id: int
+    players: List[Player]
+
+
+class TournamentSimulator:
+    def __init__(self, config: Dict, ui_event_queue, stop_event, trainer: EvolutionTrainer):
+        self.cfg = config
+        self.ui_event_queue = ui_event_queue
+        self.stop_event = stop_event
+        self.trainer = trainer
+        self.rng = random.Random(config.get("random_seed", None))
+        # State for highlighting and stats
+        self.highlight_genome_idxs: set[str] = set()
+        self.cumulative_hands: int = 0
+        self.tournaments_run: int = 0
+        self.baseline_spread: Optional[float] = None  # for convergence progress
+        # Economy: cumulative bankroll per genome (keyed by genome UID)
+        self.genome_bankroll: Dict[str, float] = {}
+        # Player registry for quick lookup (id -> Player)
+        self.players_by_id: Dict[int, Player] = {}
+        # Live payout locking when field reaches top-10
+        self.top10_lock_active: bool = False
+        self.locked_payouts: List[Dict] = []  # list of {"player_id":..., "uid":..., "payout":...}
+        # Persistent player numbering: genome UID -> stable player_id string "<tournament>-<seq:02d>"
+        self.persistent_ids: Dict[str, str] = {}
+        # Current tournament index and per-tournament assignment counter
+        self.current_tournament: int = 1
+        self.tournament_seq_counter: int = 1
+        # Survivor counts: number of tournaments a genome has survived (advanced)
+        self.survivor_counts: Dict[str, int] = {}
+        # UI throttling
+        self._last_ui_emit_ts: float = 0.0
+
+    def initial_tables(self) -> List[Table]:
+        tables = []
+        num_tables = int(self.cfg["num_tables"])
+        seats_per_table = int(self.cfg["players_per_table"])
+        pop = self.trainer.population
+        uid_to_genome = {g.uid: g for g in pop}
+
+        # Prepare highlighted genomes (top-10 finishers) and others
+        highlighted_genomes = [uid_to_genome[uid] for uid in self.highlight_genome_idxs if uid in uid_to_genome]
+        other_genomes = [g for g in pop if g.uid not in self.highlight_genome_idxs]
+
+        # Distribute highlighted one per table (round-robin across tables)
+        self.players_by_id = {}
+        for t in range(num_tables):
+            players = []
+            # Seat one highlighted if available
+            if highlighted_genomes:
+                g = highlighted_genomes.pop(0)
+                genome_idx = pop.index(g)
+                # Assign persistent player id "<tournament>-<seq:02d>"
+                pid = self.persistent_ids.get(g.uid)
+                if pid is None:
+                    pid = f"{self.current_tournament}-{self.tournament_seq_counter:02d}"
+                    self.persistent_ids[g.uid] = pid
+                    self.tournament_seq_counter += 1
+                pl = Player(
+                    id=pid,
+                    stack=self.cfg["initial_bank"],
+                    genome_idx=genome_idx,
+                    highlight=True
+                )
+                # Do not reset bankroll here; it persists
+                players.append(pl)
+                self.players_by_id[pid] = pl
+
+            # Fill remaining seats from others
+            while len(players) < seats_per_table:
+                # Cycle through others; if exhausted, restart from beginning
+                if not other_genomes:
+                    other_genomes = pop[:]  # fallback to entire population
+                g = other_genomes.pop(0)
+                genome_idx = pop.index(g)
+                # Assign persistent player id "<tournament>-<seq:02d>"
+                pid = self.persistent_ids.get(g.uid)
+                if pid is None:
+                    pid = f"{self.current_tournament}-{self.tournament_seq_counter:02d}"
+                    self.persistent_ids[g.uid] = pid
+                    self.tournament_seq_counter += 1
+                pl = Player(
+                    id=pid,
+                    stack=self.cfg["initial_bank"],
+                    genome_idx=genome_idx,
+                    highlight=False
+                )
+                # Do not reset bankroll here; it persists
+                players.append(pl)
+                self.players_by_id[pid] = pl
+
+            tables.append(Table(id=t + 1, players=players))
+
+        return tables
+
+    def emit_tables(self, tables: List[Table]):
+        # Include cumulative bankroll in UI and emit best bankroll among current survivors.
+        # Color survivors red if they have advanced in multiple tournaments.
+        table_view = []
+        best_amount = None
+        best_player_id = None
+        for tbl in tables:
+            row = []
+            for p in tbl.players:
+                genome = self.trainer.population[p.genome_idx]
+                b = self.genome_bankroll.get(genome.uid, 0.0)
+                advanced_count = self.survivor_counts.get(genome.uid, 0)
+                # highlight stays for top-10; red flag for multi-tournament survivors
+                row.append({"id": p.id, "stack": p.stack, "highlight": p.highlight, "bankroll": b, "multi_survivor": advanced_count > 1})
+                if best_amount is None or b > best_amount:
+                    best_amount = b
+                    best_player_id = p.id
+            table_view.append(row)
+        self.ui_event_queue.put({"type": "update_tables", "tables": table_view})
+        if best_amount is not None and best_player_id is not None:
+            self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amount, "player_id": best_player_id})
+
+    def level_parameters(self, level: int) -> Dict:
+        sb = self.cfg["small_blind"] * (self.cfg["blind_increase_multiplier"] ** max(0, level - 1))
+        bb = self.cfg["big_blind"] * (self.cfg["blind_increase_multiplier"] ** max(0, level - 1))
+        ante = 0.0
+        if self.cfg["ante_enabled"] and level >= int(self.cfg["ante_start_level"]):
+            ante = self.cfg["ante_amount_bb_fraction"] * bb
+        return {"sb": sb, "bb": bb, "ante": ante}
+
+    def position_factor(self, idx: int, n: int) -> float:
+        # Early/middle/late simple mapping for aggression scaling
+        if idx < max(1, n // 3):
+            return 0.3
+        elif idx < max(2, 2 * n // 3):
+            return 0.7
+        return 1.0
+
+    def play_hand(self, table: Table, level_params: Dict) -> Optional[int]:
+        """
+        Plays a simplified hand at a given table. Returns eliminated player id or None.
+        Adds simple betting logic based on genome aggression and position to accelerate eliminations.
+        """
+        if len(table.players) <= 1:
+            return None
+
+        # Antes and blinds
+        ante = level_params["ante"]
+        sb = level_params["sb"]
+        bb = level_params["bb"]
+
+        # Rotate dealer button implicitly by rotating players list
+        table.players = table.players[1:] + table.players[:1]
+
+        # Collect antes
+        pot = 0.0
+        if ante > 0.0:
+            for pl in table.players:
+                paid = min(pl.stack, ante)
+                pl.stack -= paid
+                pot += paid
+
+        # Blinds
+        if len(table.players) >= 2:
+            sb_player = table.players[0]
+            bb_player = table.players[1]
+            sb_paid = min(sb_player.stack, sb)
+            bb_paid = min(bb_player.stack, bb)
+            sb_player.stack -= sb_paid
+            bb_player.stack -= bb_paid
+            pot += sb_paid + bb_paid
+
+        # Simple betting: each player commits extra chips based on aggression and position
+        n = len(table.players)
+        for idx, pl in enumerate(table.players):
+            g = self.trainer.population[pl.genome_idx]
+            pos_scale = self.position_factor(idx, n)
+            # Ensure a minimum commitment to drive eliminations
+            base_commit = bb * (0.5 + 0.8 * g.aggression) * pos_scale
+            # Occasional bluff commit (dampened)
+            if self.rng.random() < min(0.5, g.bluff_freq + 0.2):
+                base_commit += bb * 0.3
+            # Short-stack shove behavior (dampened)
+            if pl.stack < 4 * bb and self.rng.random() < 0.35:
+                commit = pl.stack
+            else:
+                commit = min(pl.stack, base_commit)
+            pl.stack -= commit
+            pot += commit
+
+        # Deal cards
+        deck = Deck(seed=self.rng.randint(0, 1_000_000))
+        deck.shuffle()
+        hole_cards = {}
+        for pl in table.players:
+            hole_cards[pl.id] = deck.deal(2)
+        board = deck.deal(5)
+
+        # Evaluate hands; find winner(s)
+        best_pid = None
+        ties = []
+        for pl in table.players:
+            if best_pid is None:
+                best_pid = pl.id
+                ties = [pl.id]
+            else:
+                c = compare_hands(hole_cards[pl.id], hole_cards[best_pid], board)
+                if c > 0:
+                    best_pid = pl.id
+                    ties = [pl.id]
+                elif c == 0:
+                    if pl.id not in ties:
+                        ties.append(pl.id)
+
+        # Distribute pot to winner(s)
+        if ties:
+            share = pot / len(ties)
+            for pl in table.players:
+                if pl.id in ties:
+                    pl.stack += share
+
+        # Eliminate players with zero stack
+        eliminated = None
+        survivors = []
+        for pl in table.players:
+            if pl.stack <= 0.0:
+                eliminated = pl.id
+            else:
+                survivors.append(pl)
+        table.players = survivors
+        return eliminated
+
+    def reseat(self, tables: List[Table]) -> List[Table]:
+        """
+        Balance and break tables according to tournament rules:
+        - Keep tables as even as possible.
+        - Retire tables when overall player count no longer requires them.
+        - Target max players per table from config.
+        """
+        # Flatten all players preserving relative order
+        all_players: List[Player] = []
+        for tbl in tables:
+            all_players.extend(tbl.players)
+
+        max_per_table = int(self.cfg["players_per_table"])
+        total_players = len(all_players)
+        # Compute target active tables: ceil(players / max_per_table), at least 1
+        target_tables = max(1, math.ceil(total_players / max_per_table))
+
+        new_tables: List[Table] = [Table(id=i + 1, players=[]) for i in range(target_tables)]
+
+        # Distribute players round-robin to keep tables as even as possible
+        ti = 0
+        for pl in all_players:
+            new_tables[ti % target_tables].players.append(pl)
+            ti += 1
+
+        # Ensure we don't exceed max_per_table by rebalancing if needed
+        for tbl in new_tables:
+            if len(tbl.players) > max_per_table:
+                overflow = tbl.players[max_per_table:]
+                tbl.players = tbl.players[:max_per_table]
+                # place overflow onto next tables with space
+                for pl in overflow:
+                    for dest in new_tables:
+                        if len(dest.players) < max_per_table:
+                            dest.players.append(pl)
+                            break
+
+        # Rebuild registry
+        self.players_by_id = {}
+        for tbl in new_tables:
+            for pl in tbl.players:
+                self.players_by_id[pl.id] = pl
+
+        return new_tables
+
+    def run_single_tournament(self, progress_base: float, progress_scale: float) -> Dict:
+        tables = self.initial_tables()
+
+        hands_played = 0
+        level = 1
+        level_params = self.level_parameters(level)
+
+        # Track initial player count for progress within this tournament
+        initial_players = sum(len(t.players) for t in tables)
+
+        # Economy: deduct buy-in from all entrants' cumulative bankroll BEFORE first UI emit to avoid flicker
+        buy_in = float(self.cfg.get("buy_in", 0.0))
+        for tbl in tables:
+            for pl in tbl.players:
+                genome = self.trainer.population[pl.genome_idx]
+                current = self.genome_bankroll.get(genome.uid, 0.0)
+                self.genome_bankroll[genome.uid] = current - buy_in
+
+        # Now emit tables with accurate bankrolls
+        self.emit_tables(tables)
+
+        # Track elimination order for payouts (players appended as they are eliminated)
+        elimination_order: List[Player] = []
+
+        while True:
+            if self.stop_event.is_set():
+                break
+
+            # Play a hand at each table
+            eliminated_any = False
+            for tbl in tables:
+                elim = self.play_hand(tbl, level_params)
+                if elim is not None:
+                    eliminated_any = True
+                    # Lookup full player info from registry
+                    pl = self.players_by_id.get(elim)
+                    if pl:
+                        elimination_order.append(pl)
+                        # If in top-10 phase, lock payout for this elimination
+                        if self.top10_lock_active:
+                            idx_locked = len(self.locked_payouts)
+                            payout_idx = 9 - idx_locked
+                            distribution = self.cfg.get("payout_distribution", [])
+                            prize_pool = buy_in * float(initial_players)
+                            amt = prize_pool * float(distribution[payout_idx]) if 0 <= payout_idx < len(distribution) else 0.0
+                            genome = self.trainer.population[pl.genome_idx]
+                            self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+                            # Store rank (1..10) for locked payout rows, stack is 0 for eliminated
+                            self.locked_payouts.append({"player_id": pl.id, "uid": genome.uid, "payout": amt, "rank": payout_idx + 1, "stack": 0})
+                        # Remove from registry
+                        self.players_by_id.pop(elim, None)
+                    self.ui_event_queue.put({"type": "elimination", "player_id": elim})
+
+            # Remove empty tables
+            tables = [t for t in tables if len(t.players) > 0]
+            # Reseat to balance if any elimination occurred
+            if eliminated_any:
+                tables = self.reseat(tables)
+                # Force an immediate UI emit after reseat
+                self.emit_tables(tables)
+                self._last_ui_emit_ts = time.time()
+                self.ui_event_queue.put({"type": "reseat", "tables": [[{"id": p.id, "stack": p.stack, "highlight": p.highlight} for p in tbl.players] for tbl in tables]})
+            else:
+                # No reseat; UI emit will be throttled below
+                pass
+
+            hands_played += 1
+            self.cumulative_hands += 1
+            # Blind level increase
+            if hands_played % int(self.cfg["blind_increase_hands"]) == 0:
+                level += 1
+                level_params = self.level_parameters(level)
+
+            # Activate payout locking when field reaches top-10
+            total_players = sum(len(t.players) for t in tables)
+            if not self.top10_lock_active and total_players <= 10:
+                self.top10_lock_active = True
+
+            # Throttle UI updates to avoid overwhelming the main thread at very fast hand speeds
+            now_ts = time.time()
+            min_interval = float(self.cfg.get("ui_min_update_interval_sec", 0.05))
+            if (now_ts - self._last_ui_emit_ts) >= min_interval:
+                # Emit tables
+                self.emit_tables(tables)
+                # Status line
+                self.ui_event_queue.put({
+                    "type": "progress",
+                    "value": None,
+                    "text": f"Tournaments: {self.tournaments_run} | Cumulative hands: {self.cumulative_hands} | Hands this tournament: {hands_played} | Level: {level} | Players remaining: {total_players}"
+                })
+                # Projected payouts
+                prize_pool = buy_in * float(initial_players)
+                distribution = self.cfg.get("payout_distribution", [])
+                # Build current leaderboard by stack
+                current_players = []
+                for tbl in tables:
+                    for pl in tbl.players:
+                        current_players.append(pl)
+                current_players.sort(key=lambda p: p.stack, reverse=True)
+
+                # Build rank-based projections 1..10 (winner at top) robustly
+                rank_rows: Dict[int, Dict] = {}
+                # Insert locked payouts with their exact ranks
+                for lp in self.locked_payouts:
+                    r = int(lp.get("rank", 0))
+                    if 1 <= r <= 10:
+                        rank_rows[r] = {"player_id": lp["player_id"], "payout": lp["payout"], "stack": lp.get("stack", 0)}
+
+                # Determine remaining ranks that are not locked
+                remaining_ranks = [r for r in range(1, 11) if r not in rank_rows]
+
+                # Map current leaders to remaining ranks in order
+                leaders = current_players[:len(remaining_ranks)]
+                for i, r in enumerate(remaining_ranks):
+                    if i < len(leaders):
+                        pl = leaders[i]
+                        amt = prize_pool * float(distribution[r - 1]) if (r - 1) < len(distribution) else 0.0
+                        rank_rows[r] = {"player_id": pl.id, "payout": amt, "stack": pl.stack}
+                    else:
+                        # No player available for this rank
+                        rank_rows[r] = {"player_id": "-", "payout": 0.0, "stack": 0}
+
+                # Emit in rank order (winner at top)
+                projections = [rank_rows.get(rank, {"player_id": "-", "payout": 0.0, "stack": 0}) for rank in range(1, 11)]
+                self.ui_event_queue.put({"type": "payout_projection", "projections": projections})
+                # Update timestamp
+                self._last_ui_emit_ts = now_ts
+
+            # Sleep to simulate pace
+            time.sleep(max(0.0, float(self.cfg["hand_speed_sec"])))
+
+            # Check end of tournament
+            if total_players <= 1:
+                break
+
+        # Collect survivors (final table players)
+        survivors: List[Player] = []
+        for tbl in tables:
+            survivors.extend(tbl.players)
+
+        # Economy: distribute prize pool among top finishers
+        prize_pool = buy_in * float(initial_players)
+        distribution = self.cfg.get("payout_distribution", [])
+
+        # Build final finishing order: winner(s) first, then eliminated players reversed (last out gets higher place)
+        finishing_order: List[Player] = []
+        if survivors:
+            survivors_sorted = sorted(survivors, key=lambda p: p.stack, reverse=True)
+            finishing_order.extend(survivors_sorted)
+        # Append eliminated players in reverse order
+        for pl in reversed(elimination_order):
+            finishing_order.append(pl)
+
+        # Distribute payouts: if top-10 locking was active, pay remaining prizes to final placements
+        if self.top10_lock_active:
+            locked_count = len(self.locked_payouts)
+            # Pay remaining prizes to final survivors (winner first)
+            for i in range(min(10 - locked_count, len(survivors))):
+                pl = survivors_sorted[i]
+                idx = i  # winner gets index 0, etc.
+                amt = prize_pool * float(distribution[idx]) if idx < len(distribution) else 0.0
+                genome = self.trainer.population[pl.genome_idx]
+                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+        else:
+            # No locking (field never reached 10), pay top-10 by finishing order
+            top_k = min(len(distribution), len(finishing_order))
+            for i in range(top_k):
+                pl = finishing_order[i]
+                amt = prize_pool * float(distribution[i])
+                # Map to genome uid
+                genome = self.trainer.population[pl.genome_idx]
+                self.genome_bankroll[genome.uid] = self.genome_bankroll.get(genome.uid, 0.0) + amt
+
+        # Emit best bankroll for dashboard among current survivors
+        best_amt = None
+        best_pid = None
+        for pl in survivors:
+            genome = self.trainer.population[pl.genome_idx]
+            b = self.genome_bankroll.get(genome.uid, 0.0)
+            if best_amt is None or b > best_amt:
+                best_amt = b
+                best_pid = pl.id
+        if best_amt is not None and best_pid is not None:
+            self.ui_event_queue.put({"type": "best_bankroll", "amount": best_amt, "player_id": best_pid})
+
+        # Prepare top-10 finisher UIDs for advancement (locked payouts first, then remaining survivors)
+        top10_uids: List[str] = [lp["uid"] for lp in self.locked_payouts][:10]
+        if len(top10_uids) < 10:
+            for pl in survivors_sorted:
+                uid = self.trainer.population[pl.genome_idx].uid
+                if uid not in top10_uids:
+                    top10_uids.append(uid)
+                if len(top10_uids) >= 10:
+                    break
+
+        return {
+            "survivors": survivors,
+            "hands_played": hands_played,
+            "final_tables": tables,
+            "top10_uids": top10_uids,
+        }
+
+    def run_optimization(self):
+        max_t = int(self.cfg["optimization_max_tournaments"])
+        window = int(self.cfg["optimization_window"])
+        eps = float(self.cfg["optimization_convergence_eps"])
+        patience = int(self.cfg.get("optimization_patience_tournaments", 100))
+        for t_idx in range(max_t):
+            if self.stop_event.is_set():
+                break
+
+            # Reset payout lock and clear projection window for new tournament
+            self.top10_lock_active = False
+            self.locked_payouts = []
+            self.ui_event_queue.put({"type": "payout_projection", "projections": []})
+
+            # Start tournament
+            self.current_tournament = t_idx + 1
+            self.tournament_seq_counter = 1
+            self.ui_event_queue.put({"type": "progress", "value": None, "text": f"Tournament {t_idx + 1}/{max_t} started"})
+
+            result = self.run_single_tournament(progress_base=0.0, progress_scale=0.0)
+            self.tournaments_run += 1
+
+            # Top-10 finisher UIDs from the tournament for advancement and highlight
+            top10_uids = result.get("top10_uids", [])
+            self.highlight_genome_idxs = set(top10_uids)
+            # Update survivor counts
+            for uid in top10_uids:
+                self.survivor_counts[uid] = self.survivor_counts.get(uid, 0) + 1
+
+            # Apply tournament-driven scores: blend normalized net winnings and rank points
+            uid_net: Dict[str, float] = {}
+            prize_pool = float(self.cfg.get("buy_in", 0.0)) * float(sum(len(t.players) for t in result.get("final_tables", [])))
+            distribution = self.cfg.get("payout_distribution", [])
+            # Locked payouts
+            for lp in self.locked_payouts:
+                uid_net[lp["uid"]] = uid_net.get(lp["uid"], 0.0) + float(lp["payout"])
+            # Survivors payouts (winner-first) if needed
+            final_survivors = result.get("survivors", [])
+            if final_survivors:
+                survivors_sorted = sorted(final_survivors, key=lambda p: p.stack, reverse=True)
+                locked_count = len(self.locked_payouts)
+                for i in range(min(10 - locked_count, len(survivors_sorted))):
+                    pl = survivors_sorted[i]
+                    uid = self.trainer.population[pl.genome_idx].uid
+                    amt = prize_pool * float(distribution[i]) if i < len(distribution) else 0.0
+                    uid_net[uid] = uid_net.get(uid, 0.0) + amt
+            # Subtract buy-in for all entrants
+            entrants_uids = [self.trainer.population[p.genome_idx].uid for p in final_survivors] + [lp["uid"] for lp in self.locked_payouts]
+            buy_in = float(self.cfg.get("buy_in", 0.0))
+            for uid in set(entrants_uids):
+                uid_net[uid] = uid_net.get(uid, 0.0) - buy_in
+
+            # Rank points: winner 10 down to 1 for 10th, zero otherwise
+            uid_rank: Dict[str, float] = {}
+            # Determine full top-10 order: locked (from 10th upward) plus survivors by stack
+            rank_order_uids: List[str] = [lp["uid"] for lp in sorted(self.locked_payouts, key=lambda x: x.get("rank", 10), reverse=False)]
+            for pl in sorted(final_survivors, key=lambda p: p.stack, reverse=True):
+                uid = self.trainer.population[pl.genome_idx].uid
+                if uid not in rank_order_uids and len(rank_order_uids) < 10:
+                    rank_order_uids.append(uid)
+            for pos, uid in enumerate(rank_order_uids[:10], start=1):
+                uid_rank[uid] = float(11 - pos) / 10.0  # 1.0 for first, 0.1 for tenth
+
+            # Blend normalized net winnings ( / prize_pool ) and rank score
+            uid_scores: Dict[str, float] = {}
+            for uid in set(list(uid_net.keys()) + list(uid_rank.keys())):
+                net_norm = (uid_net.get(uid, 0.0) / prize_pool) if prize_pool > 0 else 0.0
+                rank_score = uid_rank.get(uid, 0.0)
+                uid_scores[uid] = 0.5 * net_norm + 0.5 * rank_score
+
+            # Update trainer scores
+            self.trainer.apply_tournament_scores(uid_scores)
+
+            # Rank current population without evolving to compute convergence
+            info = self.trainer.rank_population()
+            # Initialize baseline spread if not set
+            if self.baseline_spread is None:
+                self.baseline_spread = info["fitness_spread"]
+
+            # Replace population ensuring top-10 advance
+            uid_to_genome = {g.uid: g for g in self.trainer.population}
+            survivor_genomes = [uid_to_genome[uid] for uid in top10_uids if uid in uid_to_genome]
+            # Mild mutation to retain winners' traits
+            self.trainer.evolve(survivor_genomes if survivor_genomes else info["elite"], mutate_rate=0.03, mutate_scale=0.03)
+
+            # Convergence progress: based on fitness spread reduction
+            current_spread = info["fitness_spread"]
+            conv_progress = 0.0
+            if self.baseline_spread and self.baseline_spread > 0:
+                conv_progress = max(0.0, min(100.0, ((self.baseline_spread - current_spread) / self.baseline_spread) * 100.0))
+
+            # Update progress at end of tournament
+            self.ui_event_queue.put({"type": "progress", "value": conv_progress, "text": f"Completed {t_idx + 1}/{max_t} | Convergence {conv_progress:0.1f}%"})
+
+            # Convergence check with minimum tournaments threshold
+            min_t = int(self.cfg.get("optimization_min_tournaments_for_convergence", 10))
+            if self.trainer.check_convergence(window=window, eps=eps, min_tournaments=min_t):
+                best = self.trainer.best_ranges()
+                self.ui_event_queue.put({"type": "progress", "value": 100.0, "text": "Converged"})
+                return True, best
+
+            # Patience early stop: stop if we've reached the configured patience count without convergence
+            if (t_idx + 1) >= patience:
+                best = self.trainer.best_ranges()
+                return False, best
+
+        best = self.trainer.best_ranges()
+        return False, best
