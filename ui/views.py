@@ -113,14 +113,18 @@ class TournamentView(ttk.Frame):
         ttk.Button(left_ctrl, text="Start Simulation", command=self.start_cb).pack(side=tk.LEFT, padx=2, pady=0)
         ttk.Button(left_ctrl, text="Stop Simulation", command=self.stop_cb).pack(side=tk.LEFT, padx=2, pady=0)
 
-        # Right info: best bankroll and payout projections
-        right_info = ttk.Frame(ctrl, style="NoPad.TFrame")
-        right_info.pack(side=tk.RIGHT, padx=6, pady=0)
+        # Body: split into left tables and right sidebar
+        body = ttk.Frame(self, style="NoPad.TFrame")
+        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        # Right sidebar: best bankroll and payout projections
+        right_info = ttk.Frame(body, style="NoPad.TFrame")
+        right_info.pack(side=tk.RIGHT, fill=tk.Y, padx=6, pady=0)
         self.best_bankroll_var = tk.StringVar(value="Best bankroll: $0")
         ttk.Label(right_info, textvariable=self.best_bankroll_var).pack(side=tk.TOP, anchor="e")
 
-        # Live payout projections (ranked 1..10, winner at top)
-        self.payout_tree = ttk.Treeview(right_info, columns=("place", "player", "stack", "payout"), show="headings", height=10)
+        # Live payout projections
+        self.payout_tree = ttk.Treeview(right_info, columns=("place", "player", "stack", "payout"), show="headings", height=18)
         self.payout_tree.heading("place", text="Place")
         self.payout_tree.heading("player", text="Player")
         self.payout_tree.heading("stack", text="Stack")
@@ -129,14 +133,14 @@ class TournamentView(ttk.Frame):
         self.payout_tree.column("player", width=80, anchor="e")
         self.payout_tree.column("stack", width=80, anchor="e")
         self.payout_tree.column("payout", width=120, anchor="e")
-        self.payout_tree.pack(side=tk.TOP, anchor="e")
+        self.payout_tree.pack(side=tk.TOP, anchor="e", fill=tk.Y, expand=False)
 
         # Dedicated tables container to keep layout stable and avoid jumping
-        self.tables_container = ttk.Frame(self, style="NoPad.TFrame")
-        self.tables_container.pack(side=tk.TOP, fill=tk.X, expand=False, padx=0, pady=0)
+        self.tables_container = ttk.Frame(body, style="NoPad.TFrame")
+        self.tables_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=0, pady=0)
         # Use a Canvas with a fixed height to anchor content at the top and add a vertical scrollbar
         self.tables_canvas = tk.Canvas(self.tables_container, height=420, borderwidth=0, highlightthickness=0)
-        self.tables_canvas.pack(side=tk.LEFT, anchor="n", fill=tk.X, expand=False)
+        self.tables_canvas.pack(side=tk.LEFT, anchor="n", fill=tk.BOTH, expand=True)
         self.tables_scroll = ttk.Scrollbar(self.tables_container, orient="vertical", command=self.tables_canvas.yview)
         self.tables_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tables_canvas.configure(yscrollcommand=self.tables_scroll.set)
