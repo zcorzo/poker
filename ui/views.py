@@ -129,9 +129,17 @@ class TournamentView(ttk.Frame):
         self.payout_tree.column("payout", width=120, anchor="e")
         self.payout_tree.pack(side=tk.TOP, anchor="e")
 
-        # Tables container anchored at top (pack with no expand to prevent jumping)
-        self.canvas = ttk.Frame(self, style="NoPad.TFrame")
-        self.canvas.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, padx=0, pady=0)
+        # Dedicated tables container to keep layout stable and avoid jumping
+        self.tables_container = ttk.Frame(self, style="NoPad.TFrame")
+        self.tables_container.pack(side=tk.TOP, fill=tk.X, expand=False, padx=0, pady=0)
+        # Use a Canvas with a fixed height to anchor content at the top
+        self.tables_canvas = tk.Canvas(self.tables_container, height=420, borderwidth=0, highlightthickness=0)
+        self.tables_canvas.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False)
+        # Inner frame inside the canvas where tables are built
+        self.canvas_inner = ttk.Frame(self.tables_canvas, style="NoPad.TFrame")
+        self.tables_canvas.create_window((0, 0), window=self.canvas_inner, anchor="nw")
+        # Keep scrollregion in sync (even if we don't show scrollbars)
+        self.canvas_inner.bind("<Configure>", lambda e: self.tables_canvas.configure(scrollregion=self.tables_canvas.bbox("all")))
 
     def clear_payouts(self):
         # Clear all rows in the payout projection tree
@@ -140,33 +148,33 @@ class TournamentView(ttk.Frame):
                 self.payout_tree.delete(i)
 
     def build_tables(self, num_tables, players_per_table):
-        # Ensure canvas exists (guard against early calls before __init__ completed)
-        if not hasattr(self, "canvas") or self.canvas is None:
-            self.canvas = ttk.Frame(self, style="NoPad.TFrame")
-            self.canvas.grid(row=1, column=0, sticky="nw", padx=0, pady=0)
-
         # Clear old frames
         for f in getattr(self, "table_frames", []):
             f.destroy()
         self.table_frames = []
         self.player_labels = {}
 
-        # Build grid of tables
+        # Build grid of tables inside the stable inner canvas frame
+        parent = getattr(self, "canvas_inner", self)
+        # Clear any children previously added directly (safety)
+        for child in parent.winfo_children():
+            child.destroy()
+
         cols = min(4, max(1, int(num_tables ** 0.5)))
         rows = (num_tables + cols - 1) // cols
 
         idx = 0
         for r in range(rows):
-            row_frame = ttk.Frame(self.canvas)
+            row_frame = ttk.Frame(parent, style="NoPad.TFrame")
             row_frame.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, pady=0)
             for c in range(cols):
                 if idx >= num_tables:
                     break
-                tf = ttk.LabelFrame(row_frame, text=f"Table {idx + 1}")
+                tf = ttk.LabelFrame(row_frame, text=f"Table {idx + 1}", style="NoPad.TLabelframe")
                 tf.pack(side=tk.LEFT, padx=2, pady=0, fill=tk.BOTH, expand=True)
                 self.table_frames.append(tf)
 
-                # placeholders (two-line label: id and stack placeholder)
+                # placeholders (ID and stack placeholder)
                 for p in range(players_per_table):
                     player_id = idx * players_per_table + p + 1
                     lbl = ttk.Label(tf, text=f"{player_id}\n$", relief=tk.GROOVE, width=8, anchor="center", justify="center")
