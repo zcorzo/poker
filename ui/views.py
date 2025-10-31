@@ -133,6 +133,12 @@ class TournamentView(ttk.Frame):
         self.canvas = ttk.Frame(self, style="NoPad.TFrame")
         self.canvas.pack(side=tk.TOP, anchor="n", fill=tk.X, expand=False, padx=0, pady=0)
 
+    def clear_payouts(self):
+        # Clear all rows in the payout projection tree
+        if hasattr(self, "payout_tree") and self.payout_tree is not None:
+            for i in self.payout_tree.get_children():
+                self.payout_tree.delete(i)
+
     def build_tables(self, num_tables, players_per_table):
         # Ensure canvas exists (guard against early calls before __init__ completed)
         if not hasattr(self, "canvas") or self.canvas is None:
